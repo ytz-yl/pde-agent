@@ -1,0 +1,11 @@
+# Rust build artifacts
+target/
+
+# Runtime data files (created when the service runs)
+*.db
+*.db-shm
+*.db-wal
+*.bin
+
+# Environment variables
+.env

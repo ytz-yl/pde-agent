@@ -1,0 +1,56 @@
+[package]
+name = "knowledge-base"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "knowledge-base"
+path = "src/main.rs"
+
+[lib]
+name = "knowledge_base"
+path = "src/lib.rs"
+
+[dependencies]
+# Vector index
+usearch = "2.16"
+
+# HTTP framework
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# SQLite
+rusqlite = { version = "0.31", features = ["bundled", "backup"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTTP client (for arXiv fetcher and LLM API)
+reqwest = { version = "0.12", features = ["json"] }
+
+# XML parsing (arXiv Atom feed)
+quick-xml = { version = "0.36", features = ["serialize"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Config
+dotenvy = "0.15"
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"
