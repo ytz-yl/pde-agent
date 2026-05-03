@@ -48,37 +48,42 @@ The system has three core components and a frontend layer.
 
 ## Component 1: PDE Knowledge Base
 
-A continuously updated, structured knowledge base covering PDE theory, numerical methods, and research literature.
+A graph-structured knowledge base built on Neo4j, covering PDE theory, numerical methods, AI models, and research literature as an interconnected knowledge graph.
 
-### What it contains
+### Knowledge graph model
 
-- **Foundational theory**: classification of PDEs (elliptic, parabolic, hyperbolic), well-posedness, boundary/initial conditions
-- **Numerical methods**: FDM, FEM, FVM, spectral methods, meshfree methods, physics-informed neural networks (PINNs), neural operators (DeepONet, FNO), etc.
-- **Application domains**: fluid dynamics (Navier-Stokes), heat transfer, wave propagation, elasticity, electromagnetics, reaction-diffusion systems, etc.
-- **Recent research**: automatically ingested and organized papers from arXiv and other sources
+The knowledge base represents PDE domain knowledge as a property graph with nine node types and fifteen relation types:
 
-### Automatic paper ingestion pipeline
+**Node types**: `Equation`, `Condition`, `Theorem`, `NumericalMethod`, `AIModel`, `LossFunction`, `Metric`, `Dataset`, `Paper`
+
+**Key relation types**:
+- `SOLVES` — links solvers (AI models or numerical methods) to equations they handle
+- `HAS_CONDITION` — links equations to their boundary/initial conditions
+- `TRAINED_BY` — links AI models to their loss functions
+- `EVALUATED_BY` / `TESTED_ON` — links AI models to metrics and benchmark datasets
+- `PROPOSES` / `STUDIES` / `CITES` — links papers to the knowledge they contribute
+
+### Storage design
 
 ```
-arXiv / Semantic Scholar / journals
-         │
-         ▼
-   Paper Fetcher (scheduled)
-         │
-         ▼
-   LLM-based Classifier & Summarizer
-         │  - identifies PDE domain, method, benchmark
-         │  - extracts key contributions
-         ▼
-   Knowledge Graph / Document Store
-         │
-         ▼
-   Structured Knowledge Base (versioned)
+Neo4j (graph database)
+  └── structural fields: id, name, enums, relationships
+      fast graph traversal, Cypher queries
+
+SQLite (content store)
+  └── long-form text: paper abstracts, notes
+      keyed by (node_id, node_type)
 ```
 
-- Papers are tagged by: PDE type, numerical method, application domain, benchmark dataset, performance metrics
-- Knowledge is organized hierarchically so agents can navigate from broad topic to specific method
-- The knowledge base exposes a retrieval API (semantic search + structured query)
+### Pre-seeded knowledge
+
+The service ships with seed data covering: Heat / Wave / Poisson / Navier-Stokes / Burgers / Schrödinger / Allen-Cahn equations; Dirichlet / Neumann / Periodic boundary conditions; FDM / FEM / FVM / Spectral methods; PINN / DeepONet / FNO / PDEformer / DeepXDE models; standard loss functions, evaluation metrics, and benchmark datasets — with all relationships pre-wired.
+
+### API surface
+
+- Read endpoints: browse equations, AI models, numerical methods, papers; traverse graph relationships (solvers for an equation, full model profile, paper citation graph)
+- Write endpoints (`/internal/`): upsert and delete nodes and relations, for use by knowledge-building agents
+- Search: name-based search across all node types
 
 ---
 
@@ -174,10 +179,11 @@ An agent proposes improvements to an existing solver by combining knowledge retr
 
 ```
 pde-agent/
-├── knowledge_base/          # paper ingestion, storage, retrieval API
-│   ├── ingestion/           # fetchers, classifiers, summarizers
-│   ├── store/               # document store, knowledge graph
-│   └── api/                 # retrieval endpoints
+├── knowledge_base/          # PDE knowledge graph service (Rust)
+│   └── src/
+│       ├── store/           # Neo4j node/relation CRUD, SQLite content store
+│       ├── retrieval/       # high-level graph traversal queries
+│       └── api/             # axum HTTP handlers and routes
 ├── solvers/                 # PDE solver implementations and wrappers
 │   ├── classical/           # FDM, FEM, FVM, spectral
 │   ├── ml/                  # PINNs, DeepONet, FNO
@@ -186,6 +192,7 @@ pde-agent/
 │   ├── skills/              # agent skill packages
 │   │   └── pde-skill/       # SKILL.md + sub-guides
 │   └── src/                 # application source
+├── start-neo4j.sh           # starts the Neo4j instance
 ├── start.sh                 # one-command launcher
 └── README.md
 ```

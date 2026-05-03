@@ -1,188 +1,525 @@
-/// Core data types shared across the knowledge base crate.
+/// PDE Knowledge Base — Core domain types.
 ///
-/// These mirror the SQLite schema defined in migrations/001_initial.sql.
-use chrono::{DateTime, Utc};
+/// Node types (Neo4j labels):
+///   Equation, Condition, Theorem, NumericalMethod, AIModel,
+///   LossFunction, Metric, Dataset, Paper
+///
+/// Relation types (Neo4j edge types):
+///   SOLVES, REQUIRES, HAS_CONDITION, APPLIES_TO, TRAINED_BY,
+///   EVALUATED_BY, REPRESENTS, BASED_ON, TESTED_ON, VARIANT_OF,
+///   PROPOSES, STUDIES, USES_DATASET, REPORTS_METRIC, CITES
+///
+/// Storage layout:
+///   Neo4j  — structural fields (id, name, short enums, pdf_path …)
+///   SQLite — long text blobs (abstract, notes) keyed by (node_id, node_type)
+
 use serde::{Deserialize, Serialize};
 
-// ── Vector dimension ─────────────────────────────────────────────────────────
+// ── Node label constants ──────────────────────────────────────────────────────
 
-/// Dimension of embedding vectors (OpenAI text-embedding-3-small = 1536,
-/// or any local model output; must match whatever the ingestion layer uses).
-pub const EMBEDDING_DIM: usize = 1536;
+pub const LABEL_EQUATION: &str = "Equation";
+pub const LABEL_CONDITION: &str = "Condition";
+pub const LABEL_THEOREM: &str = "Theorem";
+pub const LABEL_NUMERICAL_METHOD: &str = "NumericalMethod";
+pub const LABEL_AI_MODEL: &str = "AIModel";
+pub const LABEL_LOSS_FUNCTION: &str = "LossFunction";
+pub const LABEL_METRIC: &str = "Metric";
+pub const LABEL_DATASET: &str = "Dataset";
+pub const LABEL_PAPER: &str = "Paper";
+
+// ── Relation type constants ───────────────────────────────────────────────────
+
+pub const REL_SOLVES: &str = "SOLVES";
+pub const REL_REQUIRES: &str = "REQUIRES";
+pub const REL_HAS_CONDITION: &str = "HAS_CONDITION";
+pub const REL_APPLIES_TO: &str = "APPLIES_TO";
+pub const REL_TRAINED_BY: &str = "TRAINED_BY";
+pub const REL_EVALUATED_BY: &str = "EVALUATED_BY";
+pub const REL_REPRESENTS: &str = "REPRESENTS";
+pub const REL_BASED_ON: &str = "BASED_ON";
+pub const REL_TESTED_ON: &str = "TESTED_ON";
+pub const REL_VARIANT_OF: &str = "VARIANT_OF";
+// Paper relations
+pub const REL_PROPOSES: &str = "PROPOSES";
+pub const REL_STUDIES: &str = "STUDIES";
+pub const REL_USES_DATASET: &str = "USES_DATASET";
+pub const REL_REPORTS_METRIC: &str = "REPORTS_METRIC";
+pub const REL_CITES: &str = "CITES";
+
+// ── Equation ──────────────────────────────────────────────────────────────────
+
+/// PDE classification types.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PdeType {
+    Parabolic,
+    Elliptic,
+    Hyperbolic,
+    Mixed,
+    Other,
+}
+
+impl PdeType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PdeType::Parabolic => "parabolic",
+            PdeType::Elliptic => "elliptic",
+            PdeType::Hyperbolic => "hyperbolic",
+            PdeType::Mixed => "mixed",
+            PdeType::Other => "other",
+        }
+    }
+}
+
+impl std::str::FromStr for PdeType {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "parabolic" => Ok(PdeType::Parabolic),
+            "elliptic" => Ok(PdeType::Elliptic),
+            "hyperbolic" => Ok(PdeType::Hyperbolic),
+            "mixed" => Ok(PdeType::Mixed),
+            _ => Ok(PdeType::Other),
+        }
+    }
+}
+
+/// A PDE equation node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Equation {
+    /// Unique identifier, e.g. "heat_equation", "navier_stokes".
+    pub id: String,
+    pub name: String,
+    /// Parabolic / elliptic / hyperbolic / mixed.
+    pub pde_type: PdeType,
+    /// Mathematical variables involved, e.g. ["t", "x", "y"].
+    pub variables: Vec<String>,
+    /// Whether the equation is time-dependent.
+    pub time_dependent: bool,
+    /// Differential operator type, e.g. "laplacian", "gradient".
+    pub operator: Option<String>,
+    /// Free-text description.
+    pub description: Option<String>,
+    /// Tags for additional categorisation, e.g. ["diffusion", "heat"].
+    pub tags: Vec<String>,
+}
+
+// ── Condition ─────────────────────────────────────────────────────────────────
+
+/// Condition type classification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConditionType {
+    /// Boundary condition.
+    Boundary,
+    /// Initial condition.
+    Initial,
+    /// Domain constraint.
+    Domain,
+    /// Regularity assumption.
+    Regularity,
+    /// Other constraint.
+    Other,
+}
+
+impl ConditionType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConditionType::Boundary => "boundary",
+            ConditionType::Initial => "initial",
+            ConditionType::Domain => "domain",
+            ConditionType::Regularity => "regularity",
+            ConditionType::Other => "other",
+        }
+    }
+}
+
+impl std::str::FromStr for ConditionType {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "boundary" => Ok(ConditionType::Boundary),
+            "initial" => Ok(ConditionType::Initial),
+            "domain" => Ok(ConditionType::Domain),
+            "regularity" => Ok(ConditionType::Regularity),
+            _ => Ok(ConditionType::Other),
+        }
+    }
+}
+
+/// A mathematical condition/constraint node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Condition {
+    pub id: String,
+    pub name: String,
+    pub condition_type: ConditionType,
+    /// Mathematical form, e.g. "u = 0 on boundary".
+    pub form: Option<String>,
+    pub description: Option<String>,
+}
+
+// ── Theorem ───────────────────────────────────────────────────────────────────
+
+/// A mathematical theorem node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Theorem {
+    pub id: String,
+    pub name: String,
+    /// The conclusion / result statement.
+    pub result: String,
+    /// Confidence that this theorem is correctly classified [0, 1].
+    pub confidence: f32,
+    pub description: Option<String>,
+    /// Source reference, e.g. paper title or textbook.
+    pub source: Option<String>,
+}
+
+// ── NumericalMethod ───────────────────────────────────────────────────────────
+
+/// Category of a numerical method.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NumericalMethodType {
+    GridBased,
+    MeshBased,
+    SpectralBased,
+    MeshFree,
+    Other,
+}
+
+impl NumericalMethodType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NumericalMethodType::GridBased => "grid_based",
+            NumericalMethodType::MeshBased => "mesh_based",
+            NumericalMethodType::SpectralBased => "spectral_based",
+            NumericalMethodType::MeshFree => "mesh_free",
+            NumericalMethodType::Other => "other",
+        }
+    }
+}
+
+impl std::str::FromStr for NumericalMethodType {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "grid_based" => Ok(NumericalMethodType::GridBased),
+            "mesh_based" => Ok(NumericalMethodType::MeshBased),
+            "spectral_based" => Ok(NumericalMethodType::SpectralBased),
+            "mesh_free" => Ok(NumericalMethodType::MeshFree),
+            _ => Ok(NumericalMethodType::Other),
+        }
+    }
+}
+
+/// A classical/numerical PDE solving method node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NumericalMethod {
+    pub id: String,
+    pub name: String,
+    pub method_type: NumericalMethodType,
+    /// Convergence order, e.g. 2 for second-order FDM.
+    pub order: Option<u32>,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+}
+
+// ── AIModel ───────────────────────────────────────────────────────────────────
+
+/// Training paradigm for an AI model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrainingType {
+    Supervised,
+    Unsupervised,
+    SelfSupervised,
+    PhysicsInformed,
+    OperatorLearning,
+}
+
+impl TrainingType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TrainingType::Supervised => "supervised",
+            TrainingType::Unsupervised => "unsupervised",
+            TrainingType::SelfSupervised => "self_supervised",
+            TrainingType::PhysicsInformed => "physics_informed",
+            TrainingType::OperatorLearning => "operator_learning",
+        }
+    }
+}
+
+impl std::str::FromStr for TrainingType {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "supervised" => Ok(TrainingType::Supervised),
+            "unsupervised" => Ok(TrainingType::Unsupervised),
+            "self_supervised" => Ok(TrainingType::SelfSupervised),
+            "physics_informed" => Ok(TrainingType::PhysicsInformed),
+            "operator_learning" => Ok(TrainingType::OperatorLearning),
+            _ => Ok(TrainingType::Supervised),
+        }
+    }
+}
+
+/// An AI/ML model for solving PDEs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AIModel {
+    pub id: String,
+    pub name: String,
+    /// Neural architecture, e.g. "MLP", "CNN", "Transformer", "FNO".
+    pub architecture: String,
+    /// Input variable names, e.g. ["x", "t"].
+    pub input_vars: Vec<String>,
+    /// Output variable names, e.g. ["u"].
+    pub output_vars: Vec<String>,
+    pub training_type: TrainingType,
+    pub description: Option<String>,
+    /// Reference paper id or citation.
+    pub paper_ref: Option<String>,
+    pub tags: Vec<String>,
+}
+
+// ── LossFunction ──────────────────────────────────────────────────────────────
+
+/// Category of a loss function.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LossType {
+    Physics,
+    DataDriven,
+    Boundary,
+    Combined,
+    Other,
+}
+
+impl LossType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LossType::Physics => "physics",
+            LossType::DataDriven => "data_driven",
+            LossType::Boundary => "boundary",
+            LossType::Combined => "combined",
+            LossType::Other => "other",
+        }
+    }
+}
+
+impl std::str::FromStr for LossType {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "physics" => Ok(LossType::Physics),
+            "data_driven" => Ok(LossType::DataDriven),
+            "boundary" => Ok(LossType::Boundary),
+            "combined" => Ok(LossType::Combined),
+            _ => Ok(LossType::Other),
+        }
+    }
+}
+
+/// A loss / objective function node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LossFunction {
+    pub id: String,
+    pub name: String,
+    pub loss_type: LossType,
+    /// Mathematical formulation description.
+    pub formulation: Option<String>,
+    pub description: Option<String>,
+}
+
+// ── Metric ────────────────────────────────────────────────────────────────────
+
+/// What aspect a metric measures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricType {
+    Accuracy,
+    Efficiency,
+    Stability,
+    Generalisation,
+    Other,
+}
+
+impl MetricType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MetricType::Accuracy => "accuracy",
+            MetricType::Efficiency => "efficiency",
+            MetricType::Stability => "stability",
+            MetricType::Generalisation => "generalisation",
+            MetricType::Other => "other",
+        }
+    }
+}
+
+impl std::str::FromStr for MetricType {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "accuracy" => Ok(MetricType::Accuracy),
+            "efficiency" => Ok(MetricType::Efficiency),
+            "stability" => Ok(MetricType::Stability),
+            "generalisation" => Ok(MetricType::Generalisation),
+            _ => Ok(MetricType::Other),
+        }
+    }
+}
+
+/// An evaluation metric node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Metric {
+    pub id: String,
+    pub name: String,
+    pub metric_type: MetricType,
+    /// Unit or scale, e.g. "dimensionless", "seconds".
+    pub unit: Option<String>,
+    pub description: Option<String>,
+}
+
+// ── Dataset ───────────────────────────────────────────────────────────────────
+
+/// A benchmark dataset node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Dataset {
+    pub id: String,
+    pub name: String,
+    /// Dimensionality string, e.g. "1D", "2D", "3D".
+    pub dimension: Option<String>,
+    /// Number of samples if known.
+    pub num_samples: Option<u64>,
+    pub description: Option<String>,
+    /// URL to dataset or paper.
+    pub url: Option<String>,
+}
 
 // ── Paper ─────────────────────────────────────────────────────────────────────
 
-/// A research paper stored in the knowledge base.
+/// A research paper node.
+///
+/// Long-form text (abstract, notes) is stored in SQLite `node_content`,
+/// not here. `pdf_path` points to the local file system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Paper {
-    /// arXiv ID (e.g. "2301.12345") or DOI. Serves as primary key.
+    /// Stable identifier. Prefer arXiv id (e.g. "2301.12345") or DOI.
     pub id: String,
     pub title: String,
-    pub abstract_text: Option<String>,
-    /// JSON-serialised list of author names.
+    /// Author list, e.g. ["Li, Z.", "Kovachki, N."].
     pub authors: Vec<String>,
-    pub published: Option<DateTime<Utc>>,
-    pub source_url: Option<String>,
-    pub pdf_url: Option<String>,
-    /// Embedding vector; `None` if not yet generated.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub embedding: Option<Vec<f32>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    /// Tags attached to this paper (populated by JOIN queries).
-    #[serde(default)]
-    pub tags: Vec<PaperTag>,
-}
-
-/// A single tag on a paper.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct PaperTag {
-    pub tag_type: TagType,
-    pub tag_value: String,
-}
-
-/// Controlled vocabulary for tag types.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum TagType {
-    PdeType,
-    Method,
-    Domain,
-    Benchmark,
-}
-
-impl TagType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TagType::PdeType => "pde_type",
-            TagType::Method => "method",
-            TagType::Domain => "domain",
-            TagType::Benchmark => "benchmark",
-        }
-    }
-}
-
-impl std::str::FromStr for TagType {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "pde_type" => Ok(TagType::PdeType),
-            "method" => Ok(TagType::Method),
-            "domain" => Ok(TagType::Domain),
-            "benchmark" => Ok(TagType::Benchmark),
-            other => Err(anyhow::anyhow!("unknown tag type: {}", other)),
-        }
-    }
-}
-
-// ── Method ────────────────────────────────────────────────────────────────────
-
-/// A PDE method entry in the knowledge base.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Method {
-    /// Short identifier, e.g. "fem", "fno".
-    pub id: String,
-    pub name: String,
-    pub category: MethodCategory,
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub embedding: Option<Vec<f32>>,
-    #[serde(default)]
+    /// 4-digit year, e.g. 2021.
+    pub published_year: Option<u32>,
+    /// arXiv identifier if available, e.g. "2010.08895".
+    pub arxiv_id: Option<String>,
+    /// DOI string, e.g. "10.1145/3524.3521".
+    pub doi: Option<String>,
+    /// Absolute path to the downloaded PDF on the local filesystem.
+    pub pdf_path: Option<String>,
     pub tags: Vec<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MethodCategory {
-    Classical,
-    Ml,
-    Hybrid,
-}
+// ── Generic node wrapper (for API responses) ──────────────────────────────────
 
-impl MethodCategory {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            MethodCategory::Classical => "classical",
-            MethodCategory::Ml => "ml",
-            MethodCategory::Hybrid => "hybrid",
-        }
-    }
-}
-
-impl std::str::FromStr for MethodCategory {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "classical" => Ok(MethodCategory::Classical),
-            "ml" => Ok(MethodCategory::Ml),
-            "hybrid" => Ok(MethodCategory::Hybrid),
-            other => Err(anyhow::anyhow!("unknown method category: {}", other)),
-        }
-    }
-}
-
-/// A directed relation between two methods.
+/// All possible node variants returned by the API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MethodRelation {
-    pub from_method: String,
-    pub to_method: String,
-    pub relation: RelationKind,
-    pub weight: f32,
+#[serde(tag = "node_type", rename_all = "snake_case")]
+pub enum KnowledgeNode {
+    Equation(Equation),
+    Condition(Condition),
+    Theorem(Theorem),
+    NumericalMethod(NumericalMethod),
+    AiModel(AIModel),
+    LossFunction(LossFunction),
+    Metric(Metric),
+    Dataset(Dataset),
+    Paper(Paper),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RelationKind {
-    Extends,
-    CompetesWith,
-    CombinesWith,
-    Requires,
-}
-
-impl RelationKind {
-    pub fn as_str(&self) -> &'static str {
+impl KnowledgeNode {
+    pub fn node_id(&self) -> &str {
         match self {
-            RelationKind::Extends => "extends",
-            RelationKind::CompetesWith => "competes_with",
-            RelationKind::CombinesWith => "combines_with",
-            RelationKind::Requires => "requires",
+            KnowledgeNode::Equation(n) => &n.id,
+            KnowledgeNode::Condition(n) => &n.id,
+            KnowledgeNode::Theorem(n) => &n.id,
+            KnowledgeNode::NumericalMethod(n) => &n.id,
+            KnowledgeNode::AiModel(n) => &n.id,
+            KnowledgeNode::LossFunction(n) => &n.id,
+            KnowledgeNode::Metric(n) => &n.id,
+            KnowledgeNode::Dataset(n) => &n.id,
+            KnowledgeNode::Paper(n) => &n.id,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            KnowledgeNode::Equation(_) => LABEL_EQUATION,
+            KnowledgeNode::Condition(_) => LABEL_CONDITION,
+            KnowledgeNode::Theorem(_) => LABEL_THEOREM,
+            KnowledgeNode::NumericalMethod(_) => LABEL_NUMERICAL_METHOD,
+            KnowledgeNode::AiModel(_) => LABEL_AI_MODEL,
+            KnowledgeNode::LossFunction(_) => LABEL_LOSS_FUNCTION,
+            KnowledgeNode::Metric(_) => LABEL_METRIC,
+            KnowledgeNode::Dataset(_) => LABEL_DATASET,
+            KnowledgeNode::Paper(_) => LABEL_PAPER,
         }
     }
 }
 
-impl std::str::FromStr for RelationKind {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "extends" => Ok(RelationKind::Extends),
-            "competes_with" => Ok(RelationKind::CompetesWith),
-            "combines_with" => Ok(RelationKind::CombinesWith),
-            "requires" => Ok(RelationKind::Requires),
-            other => Err(anyhow::anyhow!("unknown relation kind: {}", other)),
+// ── Relation ──────────────────────────────────────────────────────────────────
+
+/// A directed relation between two nodes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Relation {
+    /// Source node id.
+    pub from_id: String,
+    /// Source node label (for disambiguation when ids collide across types).
+    pub from_label: String,
+    /// Target node id.
+    pub to_id: String,
+    /// Target node label.
+    pub to_label: String,
+    /// Relation type, e.g. "SOLVES", "REQUIRES".
+    pub relation_type: String,
+    /// Optional properties bag (serialised as JSON).
+    pub properties: Option<serde_json::Value>,
+}
+
+// ── NodeType enum (for write API routing) ─────────────────────────────────────
+
+/// Discriminator used in write requests to identify which node type to create.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeType {
+    Equation,
+    Condition,
+    Theorem,
+    NumericalMethod,
+    AiModel,
+    LossFunction,
+    Metric,
+    Dataset,
+    Paper,
+}
+
+impl NodeType {
+    pub fn as_label(&self) -> &'static str {
+        match self {
+            NodeType::Equation => LABEL_EQUATION,
+            NodeType::Condition => LABEL_CONDITION,
+            NodeType::Theorem => LABEL_THEOREM,
+            NodeType::NumericalMethod => LABEL_NUMERICAL_METHOD,
+            NodeType::AiModel => LABEL_AI_MODEL,
+            NodeType::LossFunction => LABEL_LOSS_FUNCTION,
+            NodeType::Metric => LABEL_METRIC,
+            NodeType::Dataset => LABEL_DATASET,
+            NodeType::Paper => LABEL_PAPER,
         }
     }
 }
 
-// ── Helper: embedding serialisation ──────────────────────────────────────────
-
-/// Serialise a float32 embedding vector to raw little-endian bytes for SQLite BLOB storage.
-pub fn embedding_to_blob(v: &[f32]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(v.len() * 4);
-    for &x in v {
-        buf.extend_from_slice(&x.to_le_bytes());
+impl std::fmt::Display for NodeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_label())
     }
-    buf
-}
-
-/// Deserialise a raw bytes BLOB back to a float32 vector.
-pub fn blob_to_embedding(blob: &[u8]) -> anyhow::Result<Vec<f32>> {
-    if blob.len() % 4 != 0 {
-        anyhow::bail!("embedding blob length {} is not a multiple of 4", blob.len());
-    }
-    Ok(blob
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect())
 }

@@ -7,9 +7,9 @@ export function Navbar() {
   const { t, toggle, locale } = useI18n()
 
   const links = [
+    { to: '/skills', label: t.nav.skills, icon: BookMarked },
     { to: '/knowledge', label: t.nav.knowledge, icon: BookOpen },
     { to: '/solvers', label: t.nav.solver, icon: FlaskConical },
-    { to: '/skills', label: t.nav.skills, icon: BookMarked },
   ]
 
   return (

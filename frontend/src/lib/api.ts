@@ -1,11 +1,15 @@
 import type {
-  SearchHit,
+  Equation,
+  EquationSolvers,
+  EquationConditions,
+  AIModel,
+  AIModelProfile,
+  NumericalMethod,
   Paper,
-  Method,
-  RelatedEntry,
-  ComparisonReport,
-  Recommendation,
-  RecommendRequest,
+  PaperProfile,
+  PaperRef,
+  SearchHit,
+  DatasetRef,
   SolverInfo,
   SolveRequest,
   SolveResponse,
@@ -37,56 +41,98 @@ async function post<T>(url: string, body: unknown): Promise<T> {
 }
 
 // ── Knowledge Base API ────────────────────────────────────────────────────────
+// Maps to the Neo4j-backed knowledge_base Rust service (default: localhost:3001)
 
 const KB = '/api/knowledge'
 
 export const knowledgeApi = {
-  search(params: {
-    q: string
-    pde_type?: string
-    method?: string
-    domain?: string
-    limit?: number
-  }): Promise<SearchHit[]> {
-    const sp = new URLSearchParams({ q: params.q })
-    if (params.pde_type) sp.set('pde_type', params.pde_type)
-    if (params.method) sp.set('method', params.method)
-    if (params.domain) sp.set('domain', params.domain)
-    if (params.limit) sp.set('limit', String(params.limit))
-    return get<SearchHit[]>(`${KB}/search?${sp}`)
+  // ── Health ──────────────────────────────────────────────────────────────────
+  health(): Promise<{ status: string; service: string }> {
+    return get(`${KB}/health`)
   },
 
-  recentPapers(params?: { domain?: string; limit?: number }): Promise<Paper[]> {
+  // ── Equations ───────────────────────────────────────────────────────────────
+  listEquations(pdeType?: string): Promise<Equation[]> {
     const sp = new URLSearchParams()
-    if (params?.domain) sp.set('domain', params.domain)
-    if (params?.limit) sp.set('limit', String(params.limit))
-    return get<Paper[]>(`${KB}/papers/recent?${sp}`)
+    if (pdeType) sp.set('pde_type', pdeType)
+    return get<Equation[]>(`${KB}/equations?${sp}`)
   },
 
-  getPaper(id: string): Promise<Paper> {
-    return get<Paper>(`${KB}/papers/${encodeURIComponent(id)}`)
+  getEquation(id: string): Promise<Equation> {
+    return get<Equation>(`${KB}/equations/${encodeURIComponent(id)}`)
   },
 
-  listMethods(category?: string): Promise<Method[]> {
+  /** Which AI models and numerical methods can solve this equation. */
+  equationSolvers(id: string): Promise<EquationSolvers> {
+    return get<EquationSolvers>(`${KB}/equations/${encodeURIComponent(id)}/solvers`)
+  },
+
+  /** Boundary / initial conditions associated with this equation. */
+  equationConditions(id: string): Promise<EquationConditions> {
+    return get<EquationConditions>(`${KB}/equations/${encodeURIComponent(id)}/conditions`)
+  },
+
+  /** Benchmark datasets based on this equation. */
+  equationDatasets(id: string): Promise<DatasetRef[]> {
+    return get<DatasetRef[]>(`${KB}/equations/${encodeURIComponent(id)}/datasets`)
+  },
+
+  /** Papers that study this equation. */
+  equationPapers(id: string): Promise<PaperRef[]> {
+    return get<PaperRef[]>(`${KB}/equations/${encodeURIComponent(id)}/papers`)
+  },
+
+  // ── AI Models ────────────────────────────────────────────────────────────────
+  listAIModels(trainingType?: string): Promise<AIModel[]> {
     const sp = new URLSearchParams()
-    if (category) sp.set('category', category)
-    return get<Method[]>(`${KB}/methods?${sp}`)
+    if (trainingType) sp.set('training_type', trainingType)
+    return get<AIModel[]>(`${KB}/ai-models?${sp}`)
   },
 
-  getMethod(id: string): Promise<Method> {
-    return get<Method>(`${KB}/methods/${encodeURIComponent(id)}`)
+  getAIModel(id: string): Promise<AIModel> {
+    return get<AIModel>(`${KB}/ai-models/${encodeURIComponent(id)}`)
   },
 
-  relatedMethods(id: string): Promise<RelatedEntry[]> {
-    return get<RelatedEntry[]>(`${KB}/methods/${encodeURIComponent(id)}/related`)
+  /** Full profile: what it solves, loss functions, metrics, datasets. */
+  aiModelProfile(id: string): Promise<AIModelProfile> {
+    return get<AIModelProfile>(`${KB}/ai-models/${encodeURIComponent(id)}/profile`)
   },
 
-  compareMethods(a: string, b: string): Promise<ComparisonReport> {
-    return get<ComparisonReport>(`${KB}/methods/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`)
+  /** Equations this model can solve. */
+  aiModelEquations(id: string): Promise<import('@/types').EquationRef[]> {
+    return get(`${KB}/ai-models/${encodeURIComponent(id)}/equations`)
   },
 
-  recommend(req: RecommendRequest): Promise<Recommendation[]> {
-    return post<Recommendation[]>(`${KB}/recommend`, req)
+  // ── Numerical Methods ────────────────────────────────────────────────────────
+  listNumericalMethods(): Promise<NumericalMethod[]> {
+    return get<NumericalMethod[]>(`${KB}/numerical-methods`)
+  },
+
+  getNumericalMethod(id: string): Promise<NumericalMethod> {
+    return get<NumericalMethod>(`${KB}/numerical-methods/${encodeURIComponent(id)}`)
+  },
+
+  // ── Papers ───────────────────────────────────────────────────────────────────
+  listPapers(year?: number): Promise<Paper[]> {
+    const sp = new URLSearchParams()
+    if (year) sp.set('year', String(year))
+    return get<Paper[]>(`${KB}/papers?${sp}`)
+  },
+
+  /** Returns paper structural fields merged with abstract/notes from SQLite. */
+  getPaper(id: string): Promise<{ paper: Paper; abstract?: string; notes?: string }> {
+    return get(`${KB}/papers/${encodeURIComponent(id)}`)
+  },
+
+  /** Full paper profile: proposes, studies, datasets, citations. */
+  paperProfile(id: string): Promise<PaperProfile> {
+    return get<PaperProfile>(`${KB}/papers/${encodeURIComponent(id)}/profile`)
+  },
+
+  // ── Search ───────────────────────────────────────────────────────────────────
+  /** Name-based search across all node types. */
+  search(q: string): Promise<SearchHit[]> {
+    return get<SearchHit[]>(`${KB}/search?q=${encodeURIComponent(q)}`)
   },
 }
 

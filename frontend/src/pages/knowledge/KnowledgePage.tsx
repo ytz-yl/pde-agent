@@ -1,19 +1,19 @@
 import { useState } from 'react'
 import { useI18n } from '@/i18n/context'
-import { PaperSearch } from './PaperSearch'
-import { RecentPapers } from './RecentPapers'
-import { MethodBrowser } from './MethodBrowser'
+import { EquationBrowser } from './EquationBrowser'
+import { ModelBrowser } from './ModelBrowser'
+import { GraphSearch } from './GraphSearch'
 
-type Tab = 'search' | 'recent' | 'methods'
+type Tab = 'equations' | 'models' | 'search'
 
 export function KnowledgePage() {
   const { t } = useI18n()
-  const [tab, setTab] = useState<Tab>('search')
+  const [tab, setTab] = useState<Tab>('equations')
 
   const TABS: { key: Tab; label: string }[] = [
+    { key: 'equations', label: t.knowledge.tabs.equations },
+    { key: 'models', label: t.knowledge.tabs.models },
     { key: 'search', label: t.knowledge.tabs.search },
-    { key: 'recent', label: t.knowledge.tabs.recent },
-    { key: 'methods', label: t.knowledge.tabs.methods },
   ]
 
   return (
@@ -39,9 +39,9 @@ export function KnowledgePage() {
         ))}
       </div>
 
-      {tab === 'search' && <PaperSearch />}
-      {tab === 'recent' && <RecentPapers />}
-      {tab === 'methods' && <MethodBrowser />}
+      {tab === 'equations' && <EquationBrowser />}
+      {tab === 'models' && <ModelBrowser />}
+      {tab === 'search' && <GraphSearch />}
     </div>
   )
 }

@@ -1,13 +1,12 @@
 /// PDE Knowledge Base — HTTP service entry point.
 ///
 /// Configuration via environment variables:
-///   KB_DB_PATH         Path to the SQLite database file (default: knowledge_base.db)
-///   KB_INDEX_PATH      Path to the HNSW vector index file (default: vector_index.bin)
-///   KB_BIND_ADDR       Address to bind the HTTP server (default: 0.0.0.0:3000)
-///   OPENAI_API_KEY     API key for LLM / embedding calls
-///   OPENAI_API_BASE    LLM API base URL (default: https://api.openai.com/v1)
-///   EMBEDDING_MODEL    Embedding model name (default: text-embedding-3-small)
-///   CHAT_MODEL         Chat model name (default: gpt-4o-mini)
+///   NEO4J_URI       Bolt URI (default: bolt://localhost:7687)
+///   NEO4J_USER      Username (default: neo4j)
+///   NEO4J_PASSWORD  Password (default: password)
+///   KB_BIND_ADDR    Address to bind the HTTP server (default: 0.0.0.0:3000)
+///   KB_CONTENT_DB   Path to the SQLite content database (default: content.db)
+///   KB_SEED_DATA    Set to "false" to skip seeding initial data (default: true)
 
 use std::sync::Arc;
 
@@ -18,16 +17,16 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use knowledge_base::{
     api::{routes::build_router, AppState},
-    ingestion::{classifier::LlmConfig, pipeline::rebuild_vector_index},
-    store::{open_db, vector_index::VectorIndex},
+    store::{
+        content_repo::open_content_db,
+        graph::{connect, init_schema, seed_data},
+    },
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load .env if present (dev convenience)
     dotenvy::dotenv().ok();
 
-    // Initialise tracing
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -36,34 +35,29 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // ── Config ─────────────────────────────────────────────────────────────
-    let db_path = std::env::var("KB_DB_PATH")
-        .unwrap_or_else(|_| "knowledge_base.db".into());
-    let index_path = std::env::var("KB_INDEX_PATH")
-        .unwrap_or_else(|_| "vector_index.bin".into());
     let bind_addr = std::env::var("KB_BIND_ADDR")
         .unwrap_or_else(|_| "0.0.0.0:3000".into());
+    let content_db_path = std::env::var("KB_CONTENT_DB")
+        .unwrap_or_else(|_| "content.db".into());
+    let seed = std::env::var("KB_SEED_DATA")
+        .map(|v| v.to_lowercase() != "false")
+        .unwrap_or(true);
 
-    // ── Storage ────────────────────────────────────────────────────────────
-    tracing::info!("opening database at {}", db_path);
-    let conn = open_db(&db_path)?;
-
-    tracing::info!("loading/creating vector index at {}", index_path);
-    let vector_index = Arc::new(VectorIndex::open_or_create(&index_path)?);
-
-    // Rebuild key maps from SQLite on startup (usearch only persists vectors,
-    // not the string→u64 id mapping)
-    {
-        let count = rebuild_vector_index(&conn, &vector_index)?;
-        tracing::info!("vector index ready ({} embeddings)", count);
+    // ── Neo4j ──────────────────────────────────────────────────────────────
+    let graph = connect().await?;
+    init_schema(&graph).await?;
+    if seed {
+        seed_data(&graph).await?;
     }
+
+    // ── SQLite content db ──────────────────────────────────────────────────
+    tracing::info!("opening content db at {}", content_db_path);
+    let content_db = open_content_db(&content_db_path)?;
 
     // ── App state ──────────────────────────────────────────────────────────
     let state = Arc::new(AppState {
-        db: Arc::new(Mutex::new(conn)),
-        vector_index,
-        http_client: reqwest::Client::new(),
-        llm_cfg: Arc::new(LlmConfig::from_env()),
+        graph: Arc::new(graph),
+        content_db: Arc::new(Mutex::new(content_db)),
     });
 
     // ── Router ─────────────────────────────────────────────────────────────
@@ -73,7 +67,7 @@ async fn main() -> Result<()> {
 
     // ── Serve ──────────────────────────────────────────────────────────────
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    tracing::info!("knowledge-base listening on {}", bind_addr);
+    tracing::info!("pde-knowledge-base listening on {}", bind_addr);
     axum::serve(listener, app).await?;
 
     Ok(())

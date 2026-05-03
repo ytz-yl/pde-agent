@@ -11,7 +11,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route element={<Layout />}>
-            <Route index element={<Navigate to="/knowledge" replace />} />
+            <Route index element={<Navigate to="/skills" replace />} />
             <Route path="/knowledge" element={<KnowledgePage />} />
             <Route path="/solvers" element={<SolverPage />} />
             <Route path="/skills" element={<SkillsPage />} />

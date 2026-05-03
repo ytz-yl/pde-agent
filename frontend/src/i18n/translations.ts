@@ -4,24 +4,13 @@ export interface Translations {
   lang: { toggle: string }
   knowledge: {
     title: string; subtitle: string
-    tabs: { search: string; recent: string; methods: string }
+    tabs: { equations: string; models: string; search: string }
+    equations: { selectToView: string }
+    models: { selectToView: string }
     search: {
       placeholder: string; button: string
-      allPdeTypes: string; allMethods: string; allDomains: string
       results: (n: number) => string; noResults: string
     }
-    recent: { filterLabel: string; allDomains: string; noResults: string }
-    methods: {
-      tabs: { browse: string; compare: string; recommend: string }
-      allCategories: string; selectToView: string; relatedMethods: string
-      categoryLabels: { classical: string; ml: string; hybrid: string }
-      compare: { methodA: string; methodB: string; vs: string; button: string; notFound: string }
-      recommend: {
-        pdeType: string; domain: string; domainPlaceholder: string
-        constraints: string; button: string; selectPde: string; score: string
-      }
-    }
-    paper: { etAl: string; showMore: string; showLess: string; viewPaper: string }
   }
   solver: {
     title: string; subtitle: string
@@ -59,58 +48,23 @@ export const zh: Translations = {
   // ── Knowledge page ──────────────────────────────────────────────────────────
   knowledge: {
     title: '知识库',
-    subtitle: '搜索 PDE 论文、浏览数值方法、获取求解器推荐。',
+    subtitle: '浏览 PDE 方程、AI 模型与数值方法，探索知识图谱中的关系。',
     tabs: {
-      search: '论文搜索',
-      recent: '最新论文',
-      methods: '方法',
+      equations: '方程',
+      models: '模型与方法',
+      search: '搜索',
+    },
+    equations: {
+      selectToView: '选择一个方程查看详情',
+    },
+    models: {
+      selectToView: '选择一个模型查看详情',
     },
     search: {
-      placeholder: '例如：物理信息神经网络 反问题',
+      placeholder: '例如：Navier-Stokes、FNO、heat equation…',
       button: '搜索',
-      allPdeTypes: '全部 PDE 类型',
-      allMethods: '全部方法',
-      allDomains: '全部领域',
       results: (n: number) => `${n} 条结果`,
-      noResults: '未找到论文，请尝试放宽查询条件。',
-    },
-    recent: {
-      filterLabel: '按领域过滤：',
-      allDomains: '全部领域',
-      noResults: '未找到论文。',
-    },
-    methods: {
-      tabs: {
-        browse: '浏览',
-        compare: '对比',
-        recommend: '推荐',
-      },
-      allCategories: '全部类别',
-      selectToView: '选择一个方法查看详情',
-      relatedMethods: '相关方法',
-      categoryLabels: { classical: '经典', ml: 'ML', hybrid: '混合' },
-      compare: {
-        methodA: '方法 A',
-        methodB: '方法 B',
-        vs: '对比',
-        button: '对比',
-        notFound: '未找到一个或两个方法',
-      },
-      recommend: {
-        pdeType: 'PDE 类型',
-        domain: '应用领域（可选）',
-        domainPlaceholder: '例如 fluid_dynamics',
-        constraints: '约束条件',
-        button: '获取推荐',
-        selectPde: '请选择…',
-        score: '得分',
-      },
-    },
-    paper: {
-      etAl: '等',
-      showMore: '展开',
-      showLess: '收起',
-      viewPaper: '查看论文',
+      noResults: '未找到匹配节点，请尝试其他关键词。',
     },
   },
 
@@ -184,58 +138,23 @@ export const en: Translations = {
 
   knowledge: {
     title: 'Knowledge Base',
-    subtitle: 'Search PDE papers, explore numerical methods, and get solver recommendations.',
+    subtitle: 'Explore PDE equations, AI models, and numerical methods in the knowledge graph.',
     tabs: {
-      search: 'Search papers',
-      recent: 'Recent papers',
-      methods: 'Methods',
+      equations: 'Equations',
+      models: 'Models & Methods',
+      search: 'Search',
+    },
+    equations: {
+      selectToView: 'Select an equation to view details',
+    },
+    models: {
+      selectToView: 'Select a model to view details',
     },
     search: {
-      placeholder: 'e.g. physics-informed neural networks inverse problem',
+      placeholder: 'e.g. Navier-Stokes, FNO, heat equation…',
       button: 'Search',
-      allPdeTypes: 'All PDE types',
-      allMethods: 'All methods',
-      allDomains: 'All domains',
       results: (n: number) => `${n} result${n !== 1 ? 's' : ''}`,
-      noResults: 'No papers found. Try broadening your query.',
-    },
-    recent: {
-      filterLabel: 'Filter by domain:',
-      allDomains: 'All domains',
-      noResults: 'No papers found.',
-    },
-    methods: {
-      tabs: {
-        browse: 'Browse',
-        compare: 'Compare',
-        recommend: 'Recommend',
-      },
-      allCategories: 'All categories',
-      selectToView: 'Select a method to view details',
-      relatedMethods: 'Related methods',
-      categoryLabels: { classical: 'Classical', ml: 'ML', hybrid: 'Hybrid' },
-      compare: {
-        methodA: 'Method A',
-        methodB: 'Method B',
-        vs: 'vs',
-        button: 'Compare',
-        notFound: 'One or both methods not found',
-      },
-      recommend: {
-        pdeType: 'PDE type',
-        domain: 'Domain (optional)',
-        domainPlaceholder: 'e.g. fluid_dynamics',
-        constraints: 'Constraints',
-        button: 'Get recommendations',
-        selectPde: 'Select…',
-        score: 'score',
-      },
-    },
-    paper: {
-      etAl: 'et al.',
-      showMore: 'Show more',
-      showLess: 'Show less',
-      viewPaper: 'View paper',
+      noResults: 'No nodes found. Try different keywords.',
     },
   },
 

@@ -1,3 +1,7 @@
 **/target/**
 .logs
 .pde-agent.pids
+.opencode
+*.db
+*.db-shm
+*.db-wal
