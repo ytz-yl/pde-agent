@@ -6,6 +6,7 @@ mod solvers;
 use std::sync::Arc;
 
 use axum::{routing::{get, post}, Router};
+use routes::files::upload_file;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::info;
@@ -37,6 +38,7 @@ async fn main() {
         .route("/health",  get(routes::health::health))
         .route("/solvers", get(routes::solvers::list_solvers))
         .route("/solve",   post(routes::solve::solve))
+        .route("/files",   post(upload_file))
         .with_state(registry)
         .layer(TraceLayer::new_for_http())
         .layer(cors);

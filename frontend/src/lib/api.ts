@@ -10,6 +10,9 @@ import type {
   PaperRef,
   SearchHit,
   DatasetRef,
+  Benchmark,
+  BenchResult,
+  BenchmarkLeaderboard,
   SolverInfo,
   SolveRequest,
   SolveResponse,
@@ -127,6 +130,32 @@ export const knowledgeApi = {
   /** Full paper profile: proposes, studies, datasets, citations. */
   paperProfile(id: string): Promise<PaperProfile> {
     return get<PaperProfile>(`${KB}/papers/${encodeURIComponent(id)}/profile`)
+  },
+
+  // ── Benchmarks / Leaderboards ────────────────────────────────────────────────
+  /** All defined benchmarks (metric × dataset × protocol triples). */
+  listBenchmarks(): Promise<Benchmark[]> {
+    return get<Benchmark[]>(`${KB}/benchmarks`)
+  },
+
+  /** Single benchmark with optional long-form notes. */
+  getBenchmark(id: string): Promise<{ benchmark: Benchmark; notes?: string }> {
+    return get(`${KB}/benchmarks/${encodeURIComponent(id)}`)
+  },
+
+  /** Aggregated leaderboard for a benchmark, with confidence per method. */
+  benchmarkLeaderboard(id: string): Promise<BenchmarkLeaderboard> {
+    return get<BenchmarkLeaderboard>(`${KB}/benchmarks/${encodeURIComponent(id)}/leaderboard`)
+  },
+
+  /** All BenchResults attributable to an AI model, newest first. */
+  aiModelResults(id: string): Promise<BenchResult[]> {
+    return get<BenchResult[]>(`${KB}/ai-models/${encodeURIComponent(id)}/results`)
+  },
+
+  /** All BenchResults attributable to a numerical method, newest first. */
+  numericalMethodResults(id: string): Promise<BenchResult[]> {
+    return get<BenchResult[]>(`${KB}/numerical-methods/${encodeURIComponent(id)}/results`)
   },
 
   // ── Search ───────────────────────────────────────────────────────────────────

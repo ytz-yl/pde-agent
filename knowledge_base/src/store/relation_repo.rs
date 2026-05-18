@@ -9,7 +9,8 @@ use neo4rs::Graph;
 use crate::store::schema::{Relation, REL_SOLVES, REL_REQUIRES, REL_HAS_CONDITION,
     REL_APPLIES_TO, REL_TRAINED_BY, REL_EVALUATED_BY, REL_REPRESENTS,
     REL_BASED_ON, REL_TESTED_ON, REL_VARIANT_OF,
-    REL_PROPOSES, REL_STUDIES, REL_USES_DATASET, REL_REPORTS_METRIC, REL_CITES};
+    REL_PROPOSES, REL_STUDIES, REL_USES_DATASET, REL_REPORTS_METRIC, REL_CITES,
+    REL_ON_DATASET, REL_USES_METRIC, REL_OF_METHOD, REL_ON_BENCHMARK, REL_REPORTED_IN};
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,12 @@ pub const VALID_RELATION_TYPES: &[&str] = &[
     REL_USES_DATASET,
     REL_REPORTS_METRIC,
     REL_CITES,
+    // Benchmark / BenchResult relations
+    REL_ON_DATASET,
+    REL_USES_METRIC,
+    REL_OF_METHOD,
+    REL_ON_BENCHMARK,
+    REL_REPORTED_IN,
 ];
 
 pub fn is_valid_relation_type(rel_type: &str) -> bool {

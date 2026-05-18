@@ -6,6 +6,9 @@ use serde_json::json;
 
 #[derive(Debug, Error)]
 pub enum ApiError {
+    #[error("File not found: {0}")]
+    FileNotFound(String),
+
     #[error("Solver not found: {0}")]
     SolverNotFound(String),
 
@@ -22,6 +25,7 @@ pub enum ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
+            ApiError::FileNotFound(_)   => (StatusCode::NOT_FOUND, self.to_string()),
             ApiError::SolverNotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ApiError::SolverError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),

@@ -32,6 +32,7 @@ def main():
     bc_type    = pde_spec.get("boundary_condition", "periodic").strip().lower()
     ic_flat    = pde_spec.get("initial_condition")
     params     = pde_spec.get("parameters") or {}
+    history_spec = pde_spec.get("history")
 
     x_vals = query_spec.get("x", [i / 31 for i in range(32)])
     y_vals = query_spec.get("y", [i / 31 for i in range(32)])
@@ -61,7 +62,23 @@ def main():
 
     # ---------------------------------------------------------- initial condition
     try:
-        if ic_flat is not None:
+        if history_spec:
+            # ── History path: load from uploaded tensor file ──────────────────
+            arr, hist_var_names, hist_notes = _load_history_from_file(history_spec)
+            notes.extend(hist_notes)
+            # Use the last time step, first variable as 2D IC
+            last_snap = arr[-1, :, :, 0]   # [n_x_hist, n_y_hist]
+            n = last_snap.shape[0]
+            # resize to grid_res if needed
+            if n != grid_res:
+                from scipy.ndimage import zoom
+                last_snap = zoom(last_snap, grid_res / n, order=1)
+            state = pypde.ScalarField(grid, data=last_snap.astype(np.float64))
+            notes.append(
+                f"Using last time-step of history file as initial condition "
+                f"(variable: {hist_var_names[0] if hist_var_names else 'u'})"
+            )
+        elif ic_flat is not None:
             n = int(round(len(ic_flat) ** 0.5))
             ic_arr = np.array(ic_flat, dtype=np.float64).reshape(n, n)
             # resize to grid_res if needed
@@ -218,6 +235,104 @@ def _interpolate_to_query(solution_arrays, grid_res, x_vals, y_vals):
 
 def _error(msg: str):
     print(json.dumps({"error": msg}))
+
+
+# ---------------------------------------------------------------------------
+# History tensor file loader (shared logic — mirrored from pdeformer2_infer.py)
+# ---------------------------------------------------------------------------
+
+def _load_history_from_file(history_spec: dict):
+    """
+    Load historical snapshots from an uploaded tensor file.
+
+    Returns (array [n_t, n_x, n_y, n_vars], var_names [str], notes [str]).
+    file_id in history_spec has already been resolved to an absolute path by
+    the Rust layer.
+    """
+    import os
+    file_path   = history_spec.get("file_id", "")
+    fmt         = (history_spec.get("format") or "").lower()
+    dataset_key = history_spec.get("dataset_key")
+    timesteps   = history_spec.get("input_timesteps")
+    var_names   = list(history_spec.get("variables") or [])
+    notes       = []
+
+    if not file_path or not os.path.isfile(file_path):
+        raise FileNotFoundError(f"History file not found: '{file_path}'")
+
+    if not fmt:
+        ext = os.path.splitext(file_path)[1].lstrip(".").lower()
+        fmt = {"h5": "hdf5", "hdf5": "hdf5", "npy": "npy",
+               "npz": "npz", "pt": "pt", "pth": "pt"}.get(ext, ext)
+        notes.append(f"Inferred format '{fmt}' from extension '.{ext}'")
+
+    if fmt == "hdf5":
+        import h5py
+        with h5py.File(file_path, "r") as f:
+            key = dataset_key or _h5_auto_key(f)
+            arr = f[key][()]
+            notes.append(f"Loaded HDF5 dataset '{key}' shape={arr.shape}")
+    elif fmt == "npy":
+        arr = np.load(file_path, allow_pickle=False)
+        notes.append(f"Loaded .npy shape={arr.shape}")
+    elif fmt == "npz":
+        archive = np.load(file_path, allow_pickle=False)
+        key = dataset_key or (list(archive.keys())[0] if len(archive.keys()) == 1
+                              else None)
+        if key is None:
+            raise KeyError(f"npz has multiple arrays {list(archive.keys())}; specify dataset_key")
+        arr = archive[key]
+        notes.append(f"Loaded npz array '{key}' shape={arr.shape}")
+    elif fmt in ("pt", "pth"):
+        import torch
+        tensor = torch.load(file_path, map_location="cpu")
+        if isinstance(tensor, dict):
+            keys = [k for k, v in tensor.items() if hasattr(v, "numpy")]
+            tensor = tensor[dataset_key] if (dataset_key and dataset_key in tensor) \
+                     else tensor[keys[0]]
+        arr = tensor.numpy() if hasattr(tensor, "numpy") else np.array(tensor)
+        notes.append(f"Loaded torch tensor shape={arr.shape}")
+    else:
+        raise ValueError(f"Unsupported format '{fmt}'")
+
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.ndim == 2:
+        arr = arr[np.newaxis, :, :, np.newaxis]
+    elif arr.ndim == 3:
+        if arr.shape[-1] <= 16 and arr.shape[-1] != arr.shape[-2]:
+            arr = arr[np.newaxis]
+        else:
+            arr = arr[:, :, :, np.newaxis]
+    elif arr.ndim != 4:
+        raise ValueError(f"Cannot interpret {arr.ndim}-D history tensor")
+
+    n_t, n_x, n_y, n_vars = arr.shape
+    notes.append(f"History normalised: [n_t={n_t}, n_x={n_x}, n_y={n_y}, n_vars={n_vars}]")
+
+    if timesteps is not None:
+        arr = arr[list(timesteps)]
+        notes.append(f"Selected timesteps {timesteps}")
+
+    if not var_names:
+        var_names = ["u"] if n_vars == 1 else [f"u{i}" for i in range(n_vars)]
+
+    return arr, var_names, notes
+
+
+def _h5_auto_key(h5file):
+    import h5py
+    def _find(item, path=""):
+        if isinstance(item, h5py.Dataset):
+            return path
+        for k in item.keys():
+            r = _find(item[k], f"{path}/{k}")
+            if r is not None:
+                return r
+        return None
+    key = _find(h5file)
+    if key is None:
+        raise KeyError("No dataset in HDF5 file; specify dataset_key")
+    return key
 
 
 if __name__ == "__main__":

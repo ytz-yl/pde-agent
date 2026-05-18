@@ -1,0 +1,21 @@
+{
+  "_comment": "先用 POST /files 上传张量文件，把返回的 file_id 填入下面",
+  "solver": "pdeformer2",
+  "pde": {
+    "equation": "u_t + (u^2)_x + (-0.3*u)_y = 0",
+    "history": {
+      "file_id": "<从 POST /files 获取>",
+      "format": "npy",
+      "input_timesteps": [0, 1, 2, 3, 4],
+      "variables": ["u"]
+    }
+  },
+  "query": {
+    "x": [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0],
+    "y": [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0],
+    "t": [0.0, 0.25, 0.5, 0.75, 1.0]
+  },
+  "options": {
+    "config": "results/model-L.yaml"
+  }
+}

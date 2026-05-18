@@ -46,6 +46,8 @@ export interface NumericalMethod {
   order?: number
   description?: string
   tags: string[]
+  /** Solver id at engines API `GET /solvers`. Set → callable locally. */
+  engine_id?: string
 }
 
 export interface AIModel {
@@ -58,6 +60,8 @@ export interface AIModel {
   description?: string
   paper_ref?: string
   tags: string[]
+  /** Solver id at engines API `GET /solvers`. Set → callable locally. */
+  engine_id?: string
 }
 
 export interface LossFunction {
@@ -96,6 +100,54 @@ export interface Paper {
   tags: string[]
 }
 
+// ── Benchmark / BenchResult ───────────────────────────────────────────────────
+
+export type SourceType = 'paper_reported' | 'self_run' | 'third_party_reproduction'
+export type ResultConfidence = 'verified' | 'single' | 'disputed'
+
+export interface Benchmark {
+  id: string
+  name: string
+  dataset_id: string
+  metric_id: string
+  lower_is_better: boolean
+  protocol?: string
+  tolerance?: number
+}
+
+export interface BenchResult {
+  id?: string
+  method_id: string
+  method_label: 'AIModel' | 'NumericalMethod'
+  benchmark_id: string
+  value: number
+  source_type: SourceType
+  source_paper_id?: string
+  hardware?: string
+  code_ref?: string
+  recorded_at?: string
+}
+
+export interface LeaderboardEntry {
+  method_id: string
+  method_label: 'AIModel' | 'NumericalMethod'
+  method_name?: string
+  best_value: number
+  all_values: number[]
+  n_independent_sources: number
+  n_results: number
+  confidence: ResultConfidence
+  latest_recorded_at?: string
+  source_breakdown: Record<string, number>
+}
+
+export interface BenchmarkLeaderboard {
+  benchmark: Benchmark
+  dataset_name?: string
+  metric_name?: string
+  entries: LeaderboardEntry[]
+}
+
 // ── Compound query results ────────────────────────────────────────────────────
 
 /** Lightweight reference to an equation (used in traversal results). */
@@ -130,12 +182,19 @@ export interface PaperRef {
   arxiv_id?: string
 }
 
-/** All solvers for a given equation. */
+/** One group of solvers (used by EquationSolvers below). */
+export interface SolverGroup {
+  ai_models: AIModel[]
+  numerical_methods: NumericalMethod[]
+}
+
+/** All solvers for a given equation, split by whether they are callable
+ *  through the engines API. The split is based on `engine_id` on each method. */
 export interface EquationSolvers {
   equation_id: string
   equation_name: string
-  ai_models: AIModel[]
-  numerical_methods: NumericalMethod[]
+  executable: SolverGroup
+  literature_only: SolverGroup
 }
 
 /** Full profile of an AI model. */
@@ -185,11 +244,41 @@ export interface SolverInfo {
   available: boolean
 }
 
+// ── IC value: flat array of numbers OR keyword token ─────────────────────────
+export type IcValue = number[] | 'zero' | 'grf'
+
+// ── SDF domain for non-periodic / complex-geometry BCs ───────────────────────
+export type SdfRole = 'interior' | 'boundary_dirichlet' | 'boundary_neumann' | 'boundary_mur'
+
+export interface SdfDomain {
+  name: string
+  sdf: number[]     // flat n×n signed-distance-function values
+  role: SdfRole
+}
+
+// ── Boundary condition spec ───────────────────────────────────────────────────
+export interface BcSpec {
+  domain: string
+  vars: string[]    // variable / expression names summed to zero
+  bc_type: 'dirichlet' | 'neumann' | 'mur' | 'robin'
+  coef?: number
+}
+
+// ── Full PDE specification ────────────────────────────────────────────────────
 export interface PdeSpec {
+  // Legacy single-variable fields (backward-compatible)
   equation: string
   initial_condition?: number[]
   boundary_condition?: string
   parameters?: Record<string, number>
+
+  // Multi-variable / multi-equation extensions
+  variables?: string[]
+  equations?: string[]
+  initial_conditions?: Record<string, IcValue>
+  coef_fields?: Record<string, number[]>
+  domains?: SdfDomain[]
+  bcs?: BcSpec[]
 }
 
 export interface QuerySpec {
@@ -220,6 +309,7 @@ export interface SolveMetadata {
 
 export interface SolveResponse {
   solver_used: string
+  variables: string[]
   solution: number[][][][]
   shape: SolutionShape
   metadata: SolveMetadata

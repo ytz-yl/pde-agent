@@ -1,13 +1,13 @@
-# Solvers — 架构文档
+# Engines — 架构文档
 
-本文档说明 `solvers/` 目录的整体结构、各子模块的职责，以及 `api/`、`classical/`、`ml/` 三者之间的关系。
+本文档说明 `engines/` 目录的整体结构、各子模块的职责，以及 `api/`、`classical/`、`ml/` 三者之间的关系。
 
 ---
 
 ## 目录结构
 
 ```
-solvers/
+engines/
 ├── api/                        # Rust HTTP 服务（统一入口）
 │   ├── src/
 │   │   ├── main.rs             # axum 路由注册、启动
@@ -42,7 +42,7 @@ solvers/
          │  HTTP JSON
          ▼
   ┌──────────────────────────────────────────┐
-  │            solvers/api/                  │
+  │            engines/api/                  │
   │   Rust · axum · 异步 · 统一接口           │
   │                                          │
   │  POST /solve                             │
@@ -173,7 +173,7 @@ solvers/
 | 边界条件 | 周期 / Dirichlet / Neumann / 混合 |
 | 求解坐标 | 任意时空坐标（网格无关） |
 | 硬件要求 | CPU（推理）/ Ascend NPU（训练） |
-| checkpoint | `solvers/ml/pdeformer-2/results/PDEformer2-L/model-L.ckpt` |
+| checkpoint | `engines/ml/pdeformer-2/results/PDEformer2-L/model-L.ckpt` |
 | bridge 脚本 | `api/scripts/pdeformer2_infer.py` |
 
 **方程格式（DSL）：**
@@ -215,7 +215,7 @@ solvers/
 
 ### 添加新的 classical solver
 
-1. 在 `solvers/classical/` 添加新的 git submodule
+1. 在 `engines/classical/` 添加新的 git submodule
 2. 在 `api/scripts/` 新建对应 bridge 脚本（读 stdin JSON，写 stdout JSON）
 3. 在 `api/src/solvers/` 新建 `xxx.rs`，实现 `Solver` trait
 4. 在 `api/src/solvers/mod.rs` 的 `SolverRegistry::new()` 中注册

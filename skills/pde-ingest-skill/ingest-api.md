@@ -55,11 +55,14 @@
   "training_type": "operator_learning",
   "description": "Learns solution operators in Fourier space, achieving mesh-invariant inference.",
   "paper_ref": "2010.08895",
-  "tags": ["operator_learning", "fourier", "mesh_invariant"]
+  "tags": ["operator_learning", "fourier", "mesh_invariant"],
+  "engine_id": null
 }
 ```
 
 `training_type` 合法值：`supervised` | `unsupervised` | `self_supervised` | `physics_informed` | `operator_learning`
+
+> **`engine_id` 字段**：指向 engines API 注册的 solver id（运行 `GET http://localhost:3000/solvers` 查看；目前是 `pdeformer2` 和 `classical`）。**写入时给值，意味着声明这个方法本地可调用**；留空（或省略）= 仅文献存在、不可执行。预置的 `pdeformer` 节点的 `engine_id="pdeformer2"`，已可直接调用。
 
 ### 写入 NumericalMethod（数值方法）
 
@@ -71,11 +74,14 @@
   "method_type": "mesh_based",
   "order": 2,
   "description": "Variational formulation on unstructured meshes; handles complex geometry.",
-  "tags": ["classical", "mesh_based", "variational"]
+  "tags": ["classical", "mesh_based", "variational"],
+  "engine_id": null
 }
 ```
 
 `method_type` 合法值：`grid_based` | `mesh_based` | `spectral_based` | `mesh_free` | `other`
+
+> **`engine_id` 字段**：同 AIModel，指向 engines API 的 solver id。预置的 `fdm` 节点 `engine_id="classical"`，对应 `engines/classical` 后端（py-pde 实现的 FDM/谱方法）。
 
 ### 写入 Equation（方程）
 
@@ -141,6 +147,55 @@
 
 `metric_type` 合法值：`accuracy` | `efficiency` | `stability` | `generalisation` | `other`
 
+> **Metric 现在的角色**：只是"度量词表"，定义"L2 误差"是什么。具体在某个数据集上的某次测量值，请用下面的 BenchResult 节点。
+
+### 写入 Benchmark（评测口径）
+
+`Benchmark` 把一个 `Metric` 绑到一个 `Dataset` 上，再加上协议描述，构成一个可比较的评测单位。
+
+```json
+{
+  "node_type": "benchmark",
+  "id": "pdebench_ns2d_rel_l2",
+  "name": "PDEBench NS-2D, Relative L2",
+  "dataset_id": "navier_stokes_2d",
+  "metric_id": "l2_error",
+  "lower_is_better": true,
+  "protocol": "Kolmogorov flow, 64x64, viscosity 1e-3, t=10s rollout",
+  "tolerance": 0.05
+}
+```
+
+- `dataset_id` 和 `metric_id` 必须指向已存在的 Dataset / Metric 节点。
+- 写入时**自动**建立 `(Benchmark)-[:ON_DATASET]->(Dataset)` 和 `(Benchmark)-[:USES_METRIC]->(Metric)` 关系，不要重复手写。
+- `tolerance` 是相对容差（`(max-min)/|mean|`），用于多源校验时判断"verified vs disputed"。缺省 0.05。
+- 长版本协议（完整复现说明）放 `notes` 字段，会被路由到 SQLite。
+
+### 写入 BenchResult（一次具体测量）
+
+每条 BenchResult 表示**一个方法在一个 Benchmark 上一次具体的实测值**，永远 append，从不覆盖。
+
+```json
+{
+  "node_type": "bench_result",
+  "method_id": "fno",
+  "method_label": "AIModel",
+  "benchmark_id": "pdebench_ns2d_rel_l2",
+  "value": 0.012,
+  "source_type": "paper_reported",
+  "source_paper_id": "2010.08895",
+  "hardware": "1x A100 40G",
+  "code_ref": "https://github.com/zongyi-li/fourier_neural_operator"
+}
+```
+
+- `id` 字段省略时**自动生成**（`{method}__{benchmark}__{src}__{nanos}`），返回值会带上。
+- `source_type` 合法值：`paper_reported` | `self_run` | `third_party_reproduction`。
+- `paper_reported` / `third_party_reproduction` **必须**带 `source_paper_id`，否则返回 500（校验失败）。
+- `method_label` 必须是 `"AIModel"` 或 `"NumericalMethod"`。
+- 写入时**自动**建立三条边：`OF_METHOD`、`ON_BENCHMARK`、`REPORTED_IN`（仅当 `source_paper_id` 非空），不要再手动 POST 关系。
+- 推荐用下面的 `POST /internal/results` 简化端点，入参更直观，单次调用即可。
+
 ---
 
 ## POST `/internal/relations` — 写入关系
@@ -175,8 +230,13 @@
 | `PROPOSES` | Paper → AIModel / NumericalMethod | 该论文提出了该方法 |
 | `STUDIES` | Paper → Equation | 该论文研究了该方程 |
 | `USES_DATASET` | Paper → Dataset | 该论文使用了该数据集 |
-| `REPORTS_METRIC` | Paper → Metric | 该论文报告了该指标 |
+| `REPORTS_METRIC` | Paper → Metric | 该论文报告了哪些指标**类型**（不含数值；具体数值用 BenchResult） |
 | `CITES` | Paper → Paper | 该论文引用了另一论文 |
+| `ON_DATASET` | Benchmark → Dataset | 评测在哪个数据集上做（Benchmark 写入时自动建立） |
+| `USES_METRIC` | Benchmark → Metric | 评测使用哪个指标（Benchmark 写入时自动建立） |
+| `OF_METHOD` | BenchResult → AIModel / NumericalMethod | 这次测量是哪个方法（BenchResult 写入时自动建立） |
+| `ON_BENCHMARK` | BenchResult → Benchmark | 这次测量针对哪个评测（BenchResult 写入时自动建立） |
+| `REPORTED_IN` | BenchResult → Paper | 这次测量来自哪篇论文（自动，仅当 source_paper_id 非空） |
 
 **注意**：`relation_type` 必须使用上表中的大写字符串，传入其他值会收到 400 错误并返回合法值列表。
 
@@ -203,6 +263,43 @@
 { "from_id": "fno", "from_label": "AIModel",
   "to_id": "pde_residual_loss", "to_label": "LossFunction", "relation_type": "TRAINED_BY" }
 ```
+
+---
+
+## POST `/internal/results` — 单步提交一次测量（推荐）
+
+提交一条 BenchResult，所有关联边（OF_METHOD / ON_BENCHMARK / REPORTED_IN）一次写完，比走通用 `/internal/nodes` + 三次 `/internal/relations` 快得多。
+
+```json
+POST /internal/results
+{
+  "method_id": "fno",
+  "method_label": "AIModel",
+  "benchmark_id": "pdebench_ns2d_rel_l2",
+  "value": 0.012,
+  "source_type": "paper_reported",
+  "source_paper_id": "2010.08895",
+  "hardware": "1x A100 40G",
+  "code_ref": "https://github.com/zongyi-li/fourier_neural_operator",
+  "notes": "复现脚本：scripts/run_fno_ns2d.sh，commit a1b2c3"
+}
+```
+
+返回：
+
+```json
+{ "status": "ok", "action": "upserted", "label": "BenchResult",
+  "id": "fno__pdebench_ns2d_rel_l2__paper__1850e3f0..." }
+```
+
+字段约束：
+- `source_type` ∈ {`paper_reported`, `self_run`, `third_party_reproduction`}
+- `paper_reported` / `third_party_reproduction` 必须带 `source_paper_id`
+- `method_label` 必须是 `"AIModel"` 或 `"NumericalMethod"`
+- `recorded_at` 缺省时服务端写入当前时间
+- `notes` 字段路由到 SQLite，记录复现信息
+
+录入完后用 `GET /benchmarks/<benchmark_id>/leaderboard` 查看实时榜单和 confidence 状态（`single` / `verified` / `disputed`）。
 
 ---
 
@@ -301,3 +398,12 @@ DELETE /internal/nodes/Paper/2010.08895
 | `linf_error` | L-infinity Error |
 | `mse` | Mean Squared Error |
 | `inference_time` | Inference Time |
+
+### 评测口径（Benchmark）
+| id | 数据集 | 指标 | 协议简述 |
+|---|---|---|---|
+| `pdebench_burgers1d_rel_l2` | `burgers_1d` | `l2_error` | PDEBench split, viscosity 0.01, 256 grid points, t=1.0 |
+| `pdebench_ns2d_rel_l2` | `navier_stokes_2d` | `l2_error` | Kolmogorov flow, 64x64, viscosity 1e-3, t=10s |
+| `pdebench_darcy_rel_l2` | `darcy_flow` | `l2_error` | 421x421 grid, log-normal permeability, steady state |
+
+> 录入新的 Benchmark 时：先确认 dataset_id 和 metric_id 已存在；标准评测优先复用上面三个，避免分裂同一个评测的样本量。

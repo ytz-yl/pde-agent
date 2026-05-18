@@ -1,32 +1,34 @@
 import { NavLink } from 'react-router-dom'
 import { cn } from '@/lib/utils'
-import { BookOpen, Cpu, FlaskConical, BookMarked, Languages } from 'lucide-react'
+import { BookOpen, Cpu, FlaskConical, BookMarked, Languages, Home } from 'lucide-react'
 import { useI18n } from '@/i18n/context'
 
 export function Navbar() {
   const { t, toggle, locale } = useI18n()
 
   const links = [
-    { to: '/skills', label: t.nav.skills, icon: BookMarked },
-    { to: '/knowledge', label: t.nav.knowledge, icon: BookOpen },
-    { to: '/solvers', label: t.nav.solver, icon: FlaskConical },
+    { to: '/',          label: t.nav.home,      icon: Home,        end: true },
+    { to: '/knowledge', label: t.nav.knowledge,  icon: BookOpen,    end: false },
+    { to: '/solvers',   label: t.nav.solver,     icon: FlaskConical, end: false },
+    { to: '/skills',    label: t.nav.skills,     icon: BookMarked,  end: false },
   ]
 
   return (
     <header className="border-b bg-background sticky top-0 z-10">
       <div className="max-w-7xl mx-auto px-4 h-14 flex items-center gap-6">
         {/* Logo */}
-        <div className="flex items-center gap-2 font-semibold text-foreground mr-4 shrink-0">
+        <NavLink to="/" className="flex items-center gap-2 font-semibold text-foreground mr-4 shrink-0 hover:opacity-80 transition-opacity">
           <Cpu className="h-5 w-5 text-primary" />
           PDE Agent
-        </div>
+        </NavLink>
 
         {/* Nav links */}
         <nav className="flex items-center gap-1 flex-1">
-          {links.map(({ to, label, icon: Icon }) => (
+          {links.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
+              end={end}
               className={({ isActive }) =>
                 cn(
                   'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-colors',

@@ -1,12 +1,20 @@
-// Classical PDE solver backend (py-pde via Python subprocess bridge)
+// PDEformer-2 solver backend
+//
+// Architecture: the Rust server spawns a Python subprocess using the
+// `pdeformer2` conda environment. The subprocess reads a JSON problem
+// description from stdin and writes a JSON result to stdout.
+//
+// This keeps the hot HTTP path in Rust (fast, concurrent) while the heavy
+// MindSpore/numpy computation runs in a separate Python process.
 
+use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::Instant;
 
 use anyhow::Context;
 use async_trait::async_trait;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use std::process::Stdio;
 use tracing::{debug, info, warn};
 
 use crate::error::ApiError;
@@ -15,47 +23,57 @@ use crate::models::{
 };
 use super::Solver;
 
+/// Path to the PDEformer-2 repository (relative to the workspace root or
+/// absolute). Can be overridden via env var PDEFORMER2_DIR.
+fn pdeformer2_dir() -> PathBuf {
+    std::env::var("PDEFORMER2_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            // Default: two levels up from engines/api → project root,
+            // then into engines/ml/pdeformer-2
+            let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            p.push("../ml/pdeformer-2");
+            p
+        })
+}
+
+/// Conda environment name (or full path to python binary).
 fn python_bin() -> String {
-    std::env::var("CLASSICAL_PYTHON").unwrap_or_else(|_| {
+    std::env::var("PDEFORMER2_PYTHON").unwrap_or_else(|_| {
+        // Try to locate the conda env python
         let home = std::env::var("HOME").unwrap_or_default();
-        format!("{}/miniconda3/envs/classical-pde/bin/python3", home)
+        format!("{}/miniconda3/envs/pdeformer2/bin/python", home)
     })
 }
 
-fn script_path() -> std::path::PathBuf {
-    let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("scripts/classical_solve.py");
-    p
-}
+pub struct PDEformer2Solver;
 
-pub struct ClassicalSolver;
-
-impl ClassicalSolver {
+impl PDEformer2Solver {
     pub fn new() -> Self {
         Self
     }
 }
 
 #[async_trait]
-impl Solver for ClassicalSolver {
+impl Solver for PDEformer2Solver {
     fn info(&self) -> SolverInfo {
         SolverInfo {
-            id: "classical".into(),
-            name: "Classical FDM (py-pde)".into(),
-            category: SolverCategory::Classical,
-            description: "Finite difference / pseudospectral solver powered by the py-pde \
-                           library. Supports diffusion, wave, Allen-Cahn, Cahn-Hilliard, and \
-                           arbitrary symbolic PDEs on 2D Cartesian grids."
+            id: "pdeformer2".into(),
+            name: "PDEformer-2".into(),
+            category: SolverCategory::MachineLearning,
+            description: "Foundation model for 2D PDEs pretrained on ~40 TB of simulation data. \
+                           Handles arbitrary PDE forms, domains, boundary conditions and time \
+                           dependencies. Outputs solution at any spatio-temporal coordinate."
                 .into(),
             supported_pde_types: vec![
-                "diffusion".into(),
-                "heat".into(),
-                "wave".into(),
-                "allen_cahn".into(),
-                "cahn_hilliard".into(),
-                "custom_symbolic".into(),
+                "elliptic".into(),
+                "parabolic".into(),
+                "hyperbolic".into(),
+                "nonlinear_conservation_law".into(),
+                "reaction_diffusion".into(),
+                "navier_stokes".into(),
             ],
-            backend: "py-pde / FDM / Python".into(),
+            backend: "MindSpore / Python".into(),
             available: true,
         }
     }
@@ -63,21 +81,25 @@ impl Solver for ClassicalSolver {
     async fn solve(&self, req: &SolveRequest) -> Result<SolveResponse, ApiError> {
         let t0 = Instant::now();
 
+        // Serialize the request to JSON — the Python script reads it from stdin
         let payload = serde_json::to_string(req)
             .context("Failed to serialize solve request")
             .map_err(ApiError::Internal)?;
 
+        let pdeformer2_dir = pdeformer2_dir();
         let python = python_bin();
-        let script = script_path();
+        let script = pdeformer2_dir.join("../../api/scripts/pdeformer2_infer.py");
 
         debug!(
-            "Launching classical Python bridge: {} {}",
+            "Launching Python bridge: {} {} (cwd: {})",
             python,
-            script.display()
+            script.display(),
+            pdeformer2_dir.display()
         );
 
         let mut child = Command::new(&python)
             .arg(&script)
+            .current_dir(&pdeformer2_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -85,6 +107,7 @@ impl Solver for ClassicalSolver {
             .with_context(|| format!("Failed to spawn Python process: {}", python))
             .map_err(ApiError::Internal)?;
 
+        // Write request JSON to stdin
         if let Some(stdin) = child.stdin.take() {
             let mut stdin = stdin;
             stdin
@@ -92,6 +115,7 @@ impl Solver for ClassicalSolver {
                 .await
                 .context("Failed to write to Python stdin")
                 .map_err(ApiError::Internal)?;
+            // stdin is dropped here → EOF sent to Python
         }
 
         let output = child
@@ -104,7 +128,7 @@ impl Solver for ClassicalSolver {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("classical solver stderr:\n{}", stderr);
+            warn!("PDEformer-2 stderr:\n{}", stderr);
             return Err(ApiError::SolverError(format!(
                 "Python process exited with {}: {}",
                 output.status,
@@ -113,11 +137,14 @@ impl Solver for ClassicalSolver {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Log any Python warnings/info written to stderr
         let stderr = String::from_utf8_lossy(&output.stderr);
         if !stderr.trim().is_empty() {
-            info!("classical solver stderr:\n{}", stderr);
+            info!("PDEformer-2 stderr:\n{}", stderr);
         }
 
+        // Parse the JSON result produced by the Python script
         let raw: serde_json::Value = serde_json::from_str(&stdout)
             .with_context(|| format!("Failed to parse Python output as JSON:\n{}", stdout))
             .map_err(ApiError::Internal)?;
@@ -146,13 +173,27 @@ impl Solver for ClassicalSolver {
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
             .unwrap_or_default();
 
+        // Variable names returned by Python (fallback to ["u"] for legacy)
+        let variables: Vec<String> = raw["variables"]
+            .as_array()
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+            .unwrap_or_else(|| {
+                // Derive from request if present, else default ["u"]
+                if !req.pde.variables.is_empty() {
+                    req.pde.variables.clone()
+                } else {
+                    vec!["u".into()]
+                }
+            });
+
         Ok(SolveResponse {
-            solver_used: "classical".into(),
+            solver_used: "pdeformer2".into(),
+            variables,
             solution,
             shape: SolutionShape { n_t, n_x, n_y, n_vars },
             metadata: SolveMetadata {
                 wall_time_ms,
-                backend: "py-pde 0.54 / FDM".into(),
+                backend: "MindSpore 2.8 / CPU".into(),
                 notes,
             },
         })

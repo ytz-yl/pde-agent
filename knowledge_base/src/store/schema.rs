@@ -26,6 +26,8 @@ pub const LABEL_LOSS_FUNCTION: &str = "LossFunction";
 pub const LABEL_METRIC: &str = "Metric";
 pub const LABEL_DATASET: &str = "Dataset";
 pub const LABEL_PAPER: &str = "Paper";
+pub const LABEL_BENCHMARK: &str = "Benchmark";
+pub const LABEL_BENCH_RESULT: &str = "BenchResult";
 
 // ── Relation type constants ───────────────────────────────────────────────────
 
@@ -45,6 +47,12 @@ pub const REL_STUDIES: &str = "STUDIES";
 pub const REL_USES_DATASET: &str = "USES_DATASET";
 pub const REL_REPORTS_METRIC: &str = "REPORTS_METRIC";
 pub const REL_CITES: &str = "CITES";
+// Benchmark / BenchResult relations
+pub const REL_ON_DATASET: &str = "ON_DATASET";
+pub const REL_USES_METRIC: &str = "USES_METRIC";
+pub const REL_OF_METHOD: &str = "OF_METHOD";
+pub const REL_ON_BENCHMARK: &str = "ON_BENCHMARK";
+pub const REL_REPORTED_IN: &str = "REPORTED_IN";
 
 // ── Equation ──────────────────────────────────────────────────────────────────
 
@@ -222,6 +230,11 @@ pub struct NumericalMethod {
     pub order: Option<u32>,
     pub description: Option<String>,
     pub tags: Vec<String>,
+    /// Bridge to engines API: solver id at `GET /solvers` (e.g. "classical").
+    /// `Some(_)` means the method is callable via the local engines service;
+    /// `None` means it exists only as literature reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
 }
 
 // ── AIModel ───────────────────────────────────────────────────────────────────
@@ -279,6 +292,11 @@ pub struct AIModel {
     /// Reference paper id or citation.
     pub paper_ref: Option<String>,
     pub tags: Vec<String>,
+    /// Bridge to engines API: solver id at `GET /solvers` (e.g. "pdeformer2").
+    /// `Some(_)` means the model is callable via the local engines service;
+    /// `None` means it exists only as literature reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
 }
 
 // ── LossFunction ──────────────────────────────────────────────────────────────
@@ -419,6 +437,115 @@ pub struct Paper {
     pub tags: Vec<String>,
 }
 
+// ── Benchmark / BenchResult ───────────────────────────────────────────────────
+
+/// Provenance category for a single measurement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceType {
+    /// Value lifted from a paper's reported numbers.
+    PaperReported,
+    /// Locally re-run by the maintainer / agent.
+    SelfRun,
+    /// Independent third-party reproduction (different paper).
+    ThirdPartyReproduction,
+}
+
+impl SourceType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SourceType::PaperReported => "paper_reported",
+            SourceType::SelfRun => "self_run",
+            SourceType::ThirdPartyReproduction => "third_party_reproduction",
+        }
+    }
+
+    /// Compact slug used inside auto-generated BenchResult ids.
+    pub fn short(&self) -> &'static str {
+        match self {
+            SourceType::PaperReported => "paper",
+            SourceType::SelfRun => "self",
+            SourceType::ThirdPartyReproduction => "third",
+        }
+    }
+}
+
+impl std::str::FromStr for SourceType {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "paper_reported" => Ok(SourceType::PaperReported),
+            "self_run" => Ok(SourceType::SelfRun),
+            "third_party_reproduction" => Ok(SourceType::ThirdPartyReproduction),
+            // Fall back to PaperReported (most conservative for ranking).
+            _ => Ok(SourceType::PaperReported),
+        }
+    }
+}
+
+/// A reusable evaluation protocol: a metric situated on a specific dataset.
+///
+/// Many BenchResults can target the same Benchmark; the Benchmark itself is
+/// defined once and serves as the comparison axis for ranking.
+///
+/// On upsert, two graph edges are also wired:
+///   `(Benchmark)-[:ON_DATASET]->(Dataset)`
+///   `(Benchmark)-[:USES_METRIC]->(Metric)`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Benchmark {
+    /// Stable id, e.g. "pdebench_ns2d_rel_l2".
+    pub id: String,
+    pub name: String,
+    /// Dataset this benchmark evaluates on. Must match an existing Dataset.id.
+    pub dataset_id: String,
+    /// Metric used for scoring. Must match an existing Metric.id.
+    pub metric_id: String,
+    /// Whether smaller values are better (true for error metrics, false for speedup).
+    pub lower_is_better: bool,
+    /// Short protocol summary; long form goes to SQLite via /internal/content.
+    pub protocol: Option<String>,
+    /// Relative tolerance for cross-source agreement; default 0.05 if None.
+    pub tolerance: Option<f64>,
+}
+
+/// One measured value of (method, benchmark) → value, with provenance.
+///
+/// Reliability comes from accumulating multiple BenchResults for the same
+/// (method, benchmark) pair and aggregating at query time — never overwritten.
+///
+/// On upsert, three graph edges are also wired (REPORTED_IN only when set):
+///   `(BenchResult)-[:OF_METHOD]->(<method_label>)`
+///   `(BenchResult)-[:ON_BENCHMARK]->(Benchmark)`
+///   `(BenchResult)-[:REPORTED_IN]->(Paper)`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchResult {
+    /// Stable id. If `None` on upsert, the server generates one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Method node id (must exist).
+    pub method_id: String,
+    /// Method node label: "AIModel" or "NumericalMethod".
+    pub method_label: String,
+    /// Benchmark node id (must exist).
+    pub benchmark_id: String,
+    /// The measured numeric value, in the unit declared by the metric.
+    pub value: f64,
+    /// Where the value came from.
+    pub source_type: SourceType,
+    /// Required when source_type ∈ {paper_reported, third_party_reproduction}.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_paper_id: Option<String>,
+    /// Free-form hardware string, e.g. "1x A100 80G".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware: Option<String>,
+    /// Git commit, repo URL, or script path that reproduces the value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_ref: Option<String>,
+    /// ISO-8601 timestamp; auto-set to now on upsert if None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_at: Option<String>,
+}
+
 // ── Generic node wrapper (for API responses) ──────────────────────────────────
 
 /// All possible node variants returned by the API.
@@ -434,6 +561,8 @@ pub enum KnowledgeNode {
     Metric(Metric),
     Dataset(Dataset),
     Paper(Paper),
+    Benchmark(Benchmark),
+    BenchResult(BenchResult),
 }
 
 impl KnowledgeNode {
@@ -448,6 +577,8 @@ impl KnowledgeNode {
             KnowledgeNode::Metric(n) => &n.id,
             KnowledgeNode::Dataset(n) => &n.id,
             KnowledgeNode::Paper(n) => &n.id,
+            KnowledgeNode::Benchmark(n) => &n.id,
+            KnowledgeNode::BenchResult(n) => n.id.as_deref().unwrap_or(""),
         }
     }
 
@@ -462,6 +593,8 @@ impl KnowledgeNode {
             KnowledgeNode::Metric(_) => LABEL_METRIC,
             KnowledgeNode::Dataset(_) => LABEL_DATASET,
             KnowledgeNode::Paper(_) => LABEL_PAPER,
+            KnowledgeNode::Benchmark(_) => LABEL_BENCHMARK,
+            KnowledgeNode::BenchResult(_) => LABEL_BENCH_RESULT,
         }
     }
 }
@@ -500,6 +633,8 @@ pub enum NodeType {
     Metric,
     Dataset,
     Paper,
+    Benchmark,
+    BenchResult,
 }
 
 impl NodeType {
@@ -514,6 +649,8 @@ impl NodeType {
             NodeType::Metric => LABEL_METRIC,
             NodeType::Dataset => LABEL_DATASET,
             NodeType::Paper => LABEL_PAPER,
+            NodeType::Benchmark => LABEL_BENCHMARK,
+            NodeType::BenchResult => LABEL_BENCH_RESULT,
         }
     }
 }

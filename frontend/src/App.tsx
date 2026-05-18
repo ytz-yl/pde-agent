@@ -1,6 +1,7 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { I18nProvider } from './i18n/context'
 import { Layout } from './components/Layout'
+import { HomePage } from './pages/home/HomePage'
 import { KnowledgePage } from './pages/knowledge/KnowledgePage'
 import { SolverPage } from './pages/solver/SolverPage'
 import { SkillsPage } from './pages/skills/SkillsPage'
@@ -11,7 +12,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route element={<Layout />}>
-            <Route index element={<Navigate to="/skills" replace />} />
+            <Route index element={<HomePage />} />
             <Route path="/knowledge" element={<KnowledgePage />} />
             <Route path="/solvers" element={<SolverPage />} />
             <Route path="/skills" element={<SkillsPage />} />

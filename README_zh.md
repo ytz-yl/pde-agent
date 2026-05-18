@@ -184,7 +184,7 @@ pde-agent/
 │       ├── store/           # Neo4j 节点/关系 CRUD、SQLite 内容库
 │       ├── retrieval/       # 高层图遍历查询
 │       └── api/             # axum HTTP 处理函数与路由
-├── solvers/                 # PDE 求解器
+├── engines/                 # PDE 求解器
 │   ├── classical/           # FDM、FEM、FVM、谱方法
 │   ├── ml/                  # PINNs、DeepONet、FNO
 │   └── api/                 # 求解服务接口

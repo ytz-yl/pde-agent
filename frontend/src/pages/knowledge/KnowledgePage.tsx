@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { useI18n } from '@/i18n/context'
 import { EquationBrowser } from './EquationBrowser'
 import { ModelBrowser } from './ModelBrowser'
+import { BenchmarkBrowser } from './BenchmarkBrowser'
 import { GraphSearch } from './GraphSearch'
 
-type Tab = 'equations' | 'models' | 'search'
+type Tab = 'equations' | 'models' | 'benchmarks' | 'search'
 
 export function KnowledgePage() {
   const { t } = useI18n()
@@ -13,6 +14,7 @@ export function KnowledgePage() {
   const TABS: { key: Tab; label: string }[] = [
     { key: 'equations', label: t.knowledge.tabs.equations },
     { key: 'models', label: t.knowledge.tabs.models },
+    { key: 'benchmarks', label: t.knowledge.tabs.benchmarks },
     { key: 'search', label: t.knowledge.tabs.search },
   ]
 
@@ -41,6 +43,7 @@ export function KnowledgePage() {
 
       {tab === 'equations' && <EquationBrowser />}
       {tab === 'models' && <ModelBrowser />}
+      {tab === 'benchmarks' && <BenchmarkBrowser />}
       {tab === 'search' && <GraphSearch />}
     </div>
   )

@@ -95,9 +95,9 @@ start_all() {
 
     # ── 2. Solver API ─────────────────────────────────────────────────────────
     log "Starting Solver API service..."
-    build_rust "pde-solver-api" "$SCRIPT_DIR/solvers/api"
+    build_rust "pde-solver-api" "$SCRIPT_DIR/engines/api"
 
-    SOLVER_BIN="$SCRIPT_DIR/solvers/api/target/release/pde-solver-api"
+    SOLVER_BIN="$SCRIPT_DIR/engines/api/target/release/pde-solver-api"
     LISTEN_ADDR="0.0.0.0:${SOLVER_PORT}" \
         "$SOLVER_BIN" > "$LOG_DIR/solver-api.log" 2>&1 &
     echo $! >> "$PID_FILE"

@@ -184,7 +184,7 @@ pde-agent/
 │       ├── store/           # Neo4j node/relation CRUD, SQLite content store
 │       ├── retrieval/       # high-level graph traversal queries
 │       └── api/             # axum HTTP handlers and routes
-├── solvers/                 # PDE solver implementations and wrappers
+├── engines/                 # PDE solver implementations and wrappers
 │   ├── classical/           # FDM, FEM, FVM, spectral
 │   ├── ml/                  # PINNs, DeepONet, FNO
 │   └── api/                 # solver service endpoints

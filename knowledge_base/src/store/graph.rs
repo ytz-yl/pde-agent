@@ -9,9 +9,10 @@ use anyhow::{Context, Result};
 use neo4rs::Graph;
 
 use crate::store::schema::{
-    LABEL_AI_MODEL, LABEL_CONDITION, LABEL_EQUATION, LABEL_LOSS_FUNCTION,
-    LABEL_METRIC, LABEL_NUMERICAL_METHOD,
-    REL_EVALUATED_BY, REL_SOLVES, REL_TRAINED_BY, REL_TESTED_ON,
+    LABEL_AI_MODEL, LABEL_BENCHMARK, LABEL_CONDITION, LABEL_DATASET, LABEL_EQUATION,
+    LABEL_LOSS_FUNCTION, LABEL_METRIC, LABEL_NUMERICAL_METHOD,
+    REL_EVALUATED_BY, REL_ON_DATASET, REL_SOLVES, REL_TRAINED_BY, REL_TESTED_ON,
+    REL_USES_METRIC,
 };
 
 // ── Connection ────────────────────────────────────────────────────────────────
@@ -53,6 +54,8 @@ pub async fn init_schema(graph: &Graph) -> Result<()> {
         "CREATE CONSTRAINT metric_id IF NOT EXISTS FOR (n:Metric)              REQUIRE n.id IS UNIQUE",
         "CREATE CONSTRAINT dataset_id IF NOT EXISTS FOR (n:Dataset)            REQUIRE n.id IS UNIQUE",
         "CREATE CONSTRAINT paper_id   IF NOT EXISTS FOR (n:Paper)              REQUIRE n.id IS UNIQUE",
+        "CREATE CONSTRAINT benchmark_id    IF NOT EXISTS FOR (n:Benchmark)    REQUIRE n.id IS UNIQUE",
+        "CREATE CONSTRAINT bench_result_id IF NOT EXISTS FOR (n:BenchResult)  REQUIRE n.id IS UNIQUE",
     ];
 
     for cypher in constraints {
@@ -78,6 +81,7 @@ pub async fn seed_data(graph: &Graph) -> Result<()> {
     seed_loss_functions(graph).await?;
     seed_metrics(graph).await?;
     seed_datasets(graph).await?;
+    seed_benchmarks(graph).await?;
     seed_relations(graph).await?;
     tracing::info!("seed data applied");
     Ok(())
@@ -144,26 +148,30 @@ async fn seed_conditions(graph: &Graph) -> Result<()> {
 }
 
 async fn seed_numerical_methods(graph: &Graph) -> Result<()> {
-    let methods: &[(&str, &str, &str, u32, &str)] = &[
-        // (id, name, type, order, description)
-        ("fdm", "Finite Difference Method",  "grid_based",     2, "Approximates derivatives by finite differences on structured grids."),
-        ("fem", "Finite Element Method",     "mesh_based",     2, "Variational formulation on unstructured meshes. Handles complex geometries."),
-        ("fvm", "Finite Volume Method",      "mesh_based",     2, "Integral form of conservation laws on control volumes. Widely used in CFD."),
-        ("spectral", "Spectral Methods",     "spectral_based", 0, "Global basis functions (Fourier, Chebyshev). Exponential convergence for smooth solutions."),
+    // (id, name, type, order, description, engine_id)
+    // engine_id is the corresponding solver id in the engines API at GET /solvers.
+    // Methods without a callable backend leave it empty.
+    let methods: &[(&str, &str, &str, u32, &str, &str)] = &[
+        ("fdm", "Finite Difference Method",  "grid_based",     2, "Approximates derivatives by finite differences on structured grids.", "classical"),
+        ("fem", "Finite Element Method",     "mesh_based",     2, "Variational formulation on unstructured meshes. Handles complex geometries.", ""),
+        ("fvm", "Finite Volume Method",      "mesh_based",     2, "Integral form of conservation laws on control volumes. Widely used in CFD.", ""),
+        ("spectral", "Spectral Methods",     "spectral_based", 0, "Global basis functions (Fourier, Chebyshev). Exponential convergence for smooth solutions.", ""),
     ];
 
-    for &(id, name, mtype, order, desc) in methods {
+    for &(id, name, mtype, order, desc, engine_id) in methods {
         graph.run(neo4rs::query(&format!(
             "MERGE (n:{label} {{id: $id}}) \
              ON CREATE SET n.name = $name, n.method_type = $mtype, n.order = $order, \
-                           n.description = $desc, n.tags = []",
+                           n.description = $desc, n.tags = [], n.engine_id = $engine_id \
+             ON MATCH  SET n.engine_id = $engine_id",
             label = LABEL_NUMERICAL_METHOD
         ))
         .param("id", id)
         .param("name", name)
         .param("mtype", mtype)
         .param("order", order as i64)
-        .param("desc", desc))
+        .param("desc", desc)
+        .param("engine_id", engine_id))
         .await
         .with_context(|| format!("seed numerical method {}", id))?;
     }
@@ -171,21 +179,25 @@ async fn seed_numerical_methods(graph: &Graph) -> Result<()> {
 }
 
 async fn seed_ai_models(graph: &Graph) -> Result<()> {
-    let models: &[(&str, &str, &str, &str, &str, &str)] = &[
-        // (id, name, architecture, training_type, paper_ref, description)
-        ("pinn",       "Physics-Informed Neural Network", "MLP",         "physics_informed",  "Raissi et al. 2019",  "Embeds PDE residuals into the loss of a neural network. Mesh-free, good for inverse problems."),
-        ("deeponet",   "Deep Operator Network",           "MLP",         "operator_learning", "Lu et al. 2021",      "Learns mappings between function spaces via branch/trunk nets."),
-        ("fno",        "Fourier Neural Operator",         "FNO",         "operator_learning", "Li et al. 2021",      "Learns solution operators in Fourier space. Fast inference, resolution-invariant."),
-        ("pdeformer",  "PDEformer",                       "Transformer", "supervised",        "anonymous 2024",      "Transformer-based universal PDE solver using symbolic DAG representation."),
-        ("deepxde_net","DeepXDE Network",                 "MLP",         "physics_informed",  "Lu et al. 2021b",     "PINN variant using DeepXDE framework. Supports residual-based adaptive refinement."),
+    // (id, name, architecture, training_type, paper_ref, description, engine_id)
+    // engine_id is the corresponding solver id in the engines API at GET /solvers.
+    // Models without a callable backend leave it empty.
+    let models: &[(&str, &str, &str, &str, &str, &str, &str)] = &[
+        ("pinn",       "Physics-Informed Neural Network", "MLP",         "physics_informed",  "Raissi et al. 2019",  "Embeds PDE residuals into the loss of a neural network. Mesh-free, good for inverse problems.", ""),
+        ("deeponet",   "Deep Operator Network",           "MLP",         "operator_learning", "Lu et al. 2021",      "Learns mappings between function spaces via branch/trunk nets.", ""),
+        ("fno",        "Fourier Neural Operator",         "FNO",         "operator_learning", "Li et al. 2021",      "Learns solution operators in Fourier space. Fast inference, resolution-invariant.", ""),
+        ("pdeformer",  "PDEformer",                       "Transformer", "supervised",        "anonymous 2024",      "Transformer-based universal PDE solver using symbolic DAG representation.", "pdeformer2"),
+        ("deepxde_net","DeepXDE Network",                 "MLP",         "physics_informed",  "Lu et al. 2021b",     "PINN variant using DeepXDE framework. Supports residual-based adaptive refinement.", ""),
     ];
 
-    for &(id, name, arch, training, paper, desc) in models {
+    for &(id, name, arch, training, paper, desc, engine_id) in models {
         graph.run(neo4rs::query(&format!(
             "MERGE (n:{label} {{id: $id}}) \
              ON CREATE SET n.name = $name, n.architecture = $arch, \
                            n.training_type = $training, n.paper_ref = $paper, \
-                           n.description = $desc, n.input_vars = [], n.output_vars = [], n.tags = []",
+                           n.description = $desc, n.input_vars = [], n.output_vars = [], n.tags = [], \
+                           n.engine_id = $engine_id \
+             ON MATCH  SET n.engine_id = $engine_id",
             label = LABEL_AI_MODEL
         ))
         .param("id", id)
@@ -193,7 +205,8 @@ async fn seed_ai_models(graph: &Graph) -> Result<()> {
         .param("arch", arch)
         .param("training", training)
         .param("paper", paper)
-        .param("desc", desc))
+        .param("desc", desc)
+        .param("engine_id", engine_id))
         .await
         .with_context(|| format!("seed ai model {}", id))?;
     }
@@ -273,6 +286,61 @@ async fn seed_datasets(graph: &Graph) -> Result<()> {
         .param("desc", desc))
         .await
         .with_context(|| format!("seed dataset {}", id))?;
+    }
+    Ok(())
+}
+
+async fn seed_benchmarks(graph: &Graph) -> Result<()> {
+    // (id, name, dataset_id, metric_id, lower_is_better, protocol, tolerance)
+    let benchmarks: &[(&str, &str, &str, &str, bool, &str, f64)] = &[
+        ("pdebench_burgers1d_rel_l2", "PDEBench Burgers-1D, Relative L2",
+         "burgers_1d", "l2_error", true,
+         "Standard PDEBench split, viscosity 0.01, 256 grid points, t=1.0", 0.05),
+        ("pdebench_ns2d_rel_l2", "PDEBench NS-2D, Relative L2",
+         "navier_stokes_2d", "l2_error", true,
+         "Kolmogorov flow, 64x64, viscosity 1e-3, t=10s rollout", 0.05),
+        ("pdebench_darcy_rel_l2", "PDEBench Darcy, Relative L2",
+         "darcy_flow", "l2_error", true,
+         "421x421 grid, log-normal permeability, steady state", 0.05),
+    ];
+
+    for &(id, name, ds, metric, lower, protocol, tol) in benchmarks {
+        graph.run(neo4rs::query(&format!(
+            "MERGE (n:{label} {{id: $id}}) \
+             ON CREATE SET n.name = $name, n.dataset_id = $ds, n.metric_id = $metric, \
+                           n.lower_is_better = $lower, n.protocol = $protocol, n.tolerance = $tol \
+             ON MATCH  SET n.name = $name",
+            label = LABEL_BENCHMARK
+        ))
+        .param("id", id)
+        .param("name", name)
+        .param("ds", ds)
+        .param("metric", metric)
+        .param("lower", lower)
+        .param("protocol", protocol)
+        .param("tol", tol))
+        .await
+        .with_context(|| format!("seed benchmark {}", id))?;
+
+        graph.run(neo4rs::query(&format!(
+            "MATCH (b:{bl} {{id: $bid}}), (d:{dl} {{id: $did}}) \
+             MERGE (b)-[:{rel}]->(d)",
+            bl = LABEL_BENCHMARK, dl = LABEL_DATASET, rel = REL_ON_DATASET
+        ))
+        .param("bid", id)
+        .param("did", ds))
+        .await
+        .with_context(|| format!("seed benchmark ON_DATASET {}", id))?;
+
+        graph.run(neo4rs::query(&format!(
+            "MATCH (b:{bl} {{id: $bid}}), (m:{ml} {{id: $mid}}) \
+             MERGE (b)-[:{rel}]->(m)",
+            bl = LABEL_BENCHMARK, ml = LABEL_METRIC, rel = REL_USES_METRIC
+        ))
+        .param("bid", id)
+        .param("mid", metric))
+        .await
+        .with_context(|| format!("seed benchmark USES_METRIC {}", id))?;
     }
     Ok(())
 }

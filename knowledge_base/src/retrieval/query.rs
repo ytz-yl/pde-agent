@@ -5,22 +5,35 @@ use neo4rs::Graph;
 use serde::Serialize;
 
 use crate::store::schema::{
-    AIModel, Condition, NumericalMethod, Paper,
-    LABEL_AI_MODEL, LABEL_DATASET, LABEL_EQUATION, LABEL_PAPER,
-    LABEL_LOSS_FUNCTION, LABEL_METRIC, LABEL_NUMERICAL_METHOD,
-    REL_EVALUATED_BY, REL_SOLVES, REL_TESTED_ON, REL_TRAINED_BY,
+    AIModel, BenchResult, Benchmark, Condition, NumericalMethod, Paper,
+    LABEL_AI_MODEL, LABEL_BENCHMARK, LABEL_BENCH_RESULT, LABEL_DATASET, LABEL_EQUATION,
+    LABEL_LOSS_FUNCTION, LABEL_METRIC, LABEL_NUMERICAL_METHOD, LABEL_PAPER,
+    REL_EVALUATED_BY, REL_OF_METHOD, REL_ON_BENCHMARK, REL_ON_DATASET, REL_SOLVES,
+    REL_TESTED_ON, REL_TRAINED_BY, REL_USES_METRIC,
     REL_PROPOSES, REL_STUDIES, REL_USES_DATASET, REL_CITES,
 };
 
 // ── Result types ──────────────────────────────────────────────────────────────
 
-/// All solvers (AI models + numerical methods) that can handle an equation.
+/// One group of solvers (either executable-locally or literature-only).
+#[derive(Debug, Serialize, Default)]
+pub struct SolverGroup {
+    pub ai_models: Vec<AIModel>,
+    pub numerical_methods: Vec<NumericalMethod>,
+}
+
+/// All solvers (AI models + numerical methods) that can handle an equation,
+/// split by whether they are callable through the engines API.
+///
+/// The split is based on the `engine_id` field on each method node:
+///   - `engine_id` set and non-empty  → `executable`
+///   - otherwise (null / empty)        → `literature_only`
 #[derive(Debug, Serialize)]
 pub struct EquationSolvers {
     pub equation_id: String,
     pub equation_name: String,
-    pub ai_models: Vec<AIModel>,
-    pub numerical_methods: Vec<NumericalMethod>,
+    pub executable: SolverGroup,
+    pub literature_only: SolverGroup,
 }
 
 /// Full profile of an AI model: what it solves, how it's trained, and metrics.
@@ -75,7 +88,8 @@ pub struct DatasetRef {
 
 // ── Queries ───────────────────────────────────────────────────────────────────
 
-/// Return all AI models and numerical methods that SOLVES a given equation.
+/// Return all AI models and numerical methods that SOLVES a given equation,
+/// partitioned into `executable` (engine_id non-empty) and `literature_only`.
 pub async fn solvers_for_equation(graph: &Graph, equation_id: &str) -> Result<EquationSolvers> {
     // First get the equation name
     let mut eq_result = graph
@@ -94,8 +108,8 @@ pub async fn solvers_for_equation(graph: &Graph, equation_id: &str) -> Result<Eq
         return Ok(EquationSolvers {
             equation_id: equation_id.to_string(),
             equation_name: String::new(),
-            ai_models: vec![],
-            numerical_methods: vec![],
+            executable: SolverGroup::default(),
+            literature_only: SolverGroup::default(),
         });
     };
 
@@ -109,10 +123,16 @@ pub async fn solvers_for_equation(graph: &Graph, equation_id: &str) -> Result<Eq
         .await
         .context("solvers_for_equation: ai models")?;
 
-    let mut ai_models = Vec::new();
+    let mut executable = SolverGroup::default();
+    let mut literature_only = SolverGroup::default();
+
     while let Some(row) = ai_result.next().await.context("ai model row")? {
         if let Ok(m) = row_to_ai_model_from_row(&row) {
-            ai_models.push(m);
+            if m.engine_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false) {
+                executable.ai_models.push(m);
+            } else {
+                literature_only.ai_models.push(m);
+            }
         }
     }
 
@@ -126,18 +146,21 @@ pub async fn solvers_for_equation(graph: &Graph, equation_id: &str) -> Result<Eq
         .await
         .context("solvers_for_equation: numerical methods")?;
 
-    let mut numerical_methods = Vec::new();
     while let Some(row) = nm_result.next().await.context("nm row")? {
         if let Ok(m) = row_to_numerical_method_from_row(&row) {
-            numerical_methods.push(m);
+            if m.engine_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false) {
+                executable.numerical_methods.push(m);
+            } else {
+                literature_only.numerical_methods.push(m);
+            }
         }
     }
 
     Ok(EquationSolvers {
         equation_id: eq_id,
         equation_name: eq_name,
-        ai_models,
-        numerical_methods,
+        executable,
+        literature_only,
     })
 }
 
@@ -567,6 +590,7 @@ fn ai_model_from_alias(row: &neo4rs::Row, alias: &str) -> Result<AIModel> {
         description: opt_str_node(&n, "description"),
         paper_ref: opt_str_node(&n, "paper_ref"),
         tags: json_vec_node(&n, "tags"),
+        engine_id: opt_str_node(&n, "engine_id"),
     })
 }
 
@@ -595,6 +619,7 @@ fn row_to_numerical_method_from_row(row: &neo4rs::Row) -> Result<NumericalMethod
         order: if order > 0 { Some(order as u32) } else { None },
         description: opt_str_node(&n, "description"),
         tags: json_vec_node(&n, "tags"),
+        engine_id: opt_str_node(&n, "engine_id"),
     })
 }
 
@@ -620,4 +645,221 @@ fn regex_escape(s: &str) -> String {
             }
         })
         .collect()
+}
+
+// ── Benchmark leaderboard ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultConfidence {
+    Verified,
+    Single,
+    Disputed,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LeaderboardEntry {
+    pub method_id: String,
+    pub method_label: String,
+    pub method_name: Option<String>,
+    pub best_value: f64,
+    pub all_values: Vec<f64>,
+    pub n_independent_sources: usize,
+    pub n_results: usize,
+    pub confidence: ResultConfidence,
+    pub latest_recorded_at: Option<String>,
+    pub source_breakdown: std::collections::BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BenchmarkLeaderboard {
+    pub benchmark: Benchmark,
+    pub dataset_name: Option<String>,
+    pub metric_name: Option<String>,
+    pub entries: Vec<LeaderboardEntry>,
+}
+
+/// Build the leaderboard for a benchmark. Returns None if the benchmark doesn't exist.
+///
+/// Confidence rules per (method, benchmark):
+///   - n_independent_sources == 1                            → Single
+///   - n_independent_sources ≥ 2 and spread ≤ tolerance      → Verified
+///   - n_independent_sources ≥ 2 and spread > tolerance      → Disputed
+/// Where:
+///   - independent source = distinct (source_type, source_paper_id) pair
+///   - spread = (max - min) / |mean|, falling back to (max - min) when mean is 0
+pub async fn benchmark_leaderboard(
+    graph: &Graph,
+    benchmark_id: &str,
+) -> Result<Option<BenchmarkLeaderboard>> {
+    // 1. Fetch benchmark + dataset/metric names.
+    let mut bench_q = graph
+        .execute(neo4rs::query(&format!(
+            "MATCH (b:{bl} {{id: $id}}) \
+             OPTIONAL MATCH (b)-[:{rd}]->(d:{dl}) \
+             OPTIONAL MATCH (b)-[:{rm}]->(m:{ml}) \
+             RETURN b, d.name AS ds_name, m.name AS metric_name",
+            bl = LABEL_BENCHMARK, rd = REL_ON_DATASET, dl = LABEL_DATASET,
+            rm = REL_USES_METRIC, ml = LABEL_METRIC
+        ))
+        .param("id", benchmark_id))
+        .await
+        .context("benchmark_leaderboard: get benchmark")?;
+
+    let (benchmark, dataset_name, metric_name) = match bench_q.next().await? {
+        Some(row) => {
+            let b: neo4rs::Node = row.get("b").context("benchmark node 'b'")?;
+            let benchmark = Benchmark {
+                id: b.get("id").unwrap_or_default(),
+                name: b.get("name").unwrap_or_default(),
+                dataset_id: b.get("dataset_id").unwrap_or_default(),
+                metric_id: b.get("metric_id").unwrap_or_default(),
+                lower_is_better: b.get::<bool>("lower_is_better").unwrap_or(true),
+                protocol: opt_str_node(&b, "protocol"),
+                tolerance: b.get::<f64>("tolerance").ok(),
+            };
+            let ds_name: Option<String> = row.get("ds_name").ok().filter(|s: &String| !s.is_empty());
+            let metric_name: Option<String> = row.get("metric_name").ok().filter(|s: &String| !s.is_empty());
+            (benchmark, ds_name, metric_name)
+        }
+        None => return Ok(None),
+    };
+
+    // 2. Pull all results for this benchmark joined with the method node.
+    let mut rows = graph
+        .execute(neo4rs::query(&format!(
+            "MATCH (r:{rl})-[:{ron}]->(b:{bl} {{id: $id}}) \
+             MATCH (r)-[:{rof}]->(m) \
+             RETURN m.id AS mid, labels(m)[0] AS mlabel, m.name AS mname, \
+                    r.value AS value, r.source_type AS src, \
+                    r.source_paper_id AS pid, r.recorded_at AS ts",
+            rl = LABEL_BENCH_RESULT, ron = REL_ON_BENCHMARK, bl = LABEL_BENCHMARK,
+            rof = REL_OF_METHOD
+        ))
+        .param("id", benchmark_id))
+        .await
+        .context("benchmark_leaderboard: get results")?;
+
+    struct Row {
+        mid: String,
+        mlabel: String,
+        mname: Option<String>,
+        value: f64,
+        src: String,
+        pid: String,
+        ts: Option<String>,
+    }
+    let mut all_rows: Vec<Row> = Vec::new();
+    while let Some(row) = rows.next().await? {
+        all_rows.push(Row {
+            mid: row.get("mid").unwrap_or_default(),
+            mlabel: row.get("mlabel").unwrap_or_default(),
+            mname: row.get("mname").ok().filter(|s: &String| !s.is_empty()),
+            value: row.get::<f64>("value").unwrap_or(0.0),
+            src: row.get("src").unwrap_or_default(),
+            pid: row.get("pid").unwrap_or_default(),
+            ts: row.get("ts").ok().filter(|s: &String| !s.is_empty()),
+        });
+    }
+
+    // 3. Group by (mid, mlabel).
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<(String, String), Vec<Row>> = BTreeMap::new();
+    for r in all_rows {
+        groups.entry((r.mid.clone(), r.mlabel.clone())).or_default().push(r);
+    }
+
+    // 4. Build entries.
+    let tolerance = benchmark.tolerance.unwrap_or(0.05);
+    let mut entries: Vec<LeaderboardEntry> = Vec::with_capacity(groups.len());
+
+    for ((mid, mlabel), rows) in groups {
+        let method_name = rows.iter().find_map(|r| r.mname.clone());
+        let n_results = rows.len();
+
+        // Independent sources: distinct (src, pid) tuples. self_run with empty pid all collapse.
+        let mut independent: std::collections::BTreeSet<(String, String)> =
+            std::collections::BTreeSet::new();
+        let mut breakdown: BTreeMap<String, usize> = BTreeMap::new();
+        for r in &rows {
+            independent.insert((r.src.clone(), r.pid.clone()));
+            *breakdown.entry(r.src.clone()).or_insert(0) += 1;
+        }
+        let n_independent = independent.len();
+
+        let values: Vec<f64> = rows.iter().map(|r| r.value).collect();
+        let min = values.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let abs_mean = mean.abs();
+        let spread = if abs_mean > f64::EPSILON {
+            (max - min) / abs_mean
+        } else {
+            max - min
+        };
+
+        let best_value = if benchmark.lower_is_better { min } else { max };
+
+        let confidence = if n_independent >= 2 {
+            if spread <= tolerance {
+                ResultConfidence::Verified
+            } else {
+                ResultConfidence::Disputed
+            }
+        } else {
+            ResultConfidence::Single
+        };
+
+        let latest_recorded_at = rows
+            .iter()
+            .filter_map(|r| r.ts.clone())
+            .max(); // ISO-8601 strings sort lexically
+
+        entries.push(LeaderboardEntry {
+            method_id: mid,
+            method_label: mlabel,
+            method_name,
+            best_value,
+            all_values: values,
+            n_independent_sources: n_independent,
+            n_results,
+            confidence,
+            latest_recorded_at,
+            source_breakdown: breakdown,
+        });
+    }
+
+    // 5. Sort. Primary: best_value (asc if lower_is_better, desc otherwise).
+    //    Tie-break: Verified > Single > Disputed.
+    fn confidence_rank(c: &ResultConfidence) -> u8 {
+        match c {
+            ResultConfidence::Verified => 0,
+            ResultConfidence::Single => 1,
+            ResultConfidence::Disputed => 2,
+        }
+    }
+    entries.sort_by(|a, b| {
+        let primary = if benchmark.lower_is_better {
+            a.best_value.partial_cmp(&b.best_value).unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            b.best_value.partial_cmp(&a.best_value).unwrap_or(std::cmp::Ordering::Equal)
+        };
+        primary.then_with(|| confidence_rank(&a.confidence).cmp(&confidence_rank(&b.confidence)))
+    });
+
+    Ok(Some(BenchmarkLeaderboard {
+        benchmark,
+        dataset_name,
+        metric_name,
+        entries,
+    }))
+}
+
+/// All BenchResults attributable to a given AIModel or NumericalMethod, newest first.
+pub async fn results_for_method(
+    graph: &Graph,
+    method_label: &str,
+    method_id: &str,
+) -> Result<Vec<BenchResult>> {
+    crate::store::node_repo::list_results_for_method(graph, method_label, method_id).await
 }

@@ -1,6 +1,6 @@
-[submodule "solvers/ml/pdeformer-2"]
-	path = solvers/ml/pdeformer-2
+[submodule "engines/ml/pdeformer-2"]
+	path = engines/ml/pdeformer-2
 	url = https://github.com/mindspore-ai/pdeformer-2
-[submodule "solvers/classical/py-pde"]
-	path = solvers/classical/py-pde
+[submodule "engines/classical/py-pde"]
+	path = engines/classical/py-pde
 	url = https://github.com/zwicker-group/py-pde.git

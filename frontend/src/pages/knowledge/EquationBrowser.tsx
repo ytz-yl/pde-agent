@@ -1,12 +1,27 @@
 import { useState, useEffect } from 'react'
 import { knowledgeApi } from '@/lib/api'
 import { useI18n } from '@/i18n/context'
-import type { Equation, EquationSolvers, EquationConditions, DatasetRef, PaperRef } from '@/types'
+import type { Equation, EquationSolvers, EquationConditions, DatasetRef, PaperRef, SolverGroup, AIModel, NumericalMethod } from '@/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Select } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
-import { ChevronRight, FlaskConical, BookOpen, Database, FileText } from 'lucide-react'
+import { ChevronRight, FlaskConical, BookOpen, Database, FileText, Zap } from 'lucide-react'
+
+// ── Executable badge (KB → engines bridge) ───────────────────────────────────
+
+function ExecutableBadge({ engineId }: { engineId: string }) {
+  const { t } = useI18n()
+  return (
+    <span
+      title={`engine_id = ${engineId}`}
+      className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700"
+    >
+      <Zap className="h-2.5 w-2.5" />
+      {t.knowledge.equations.executableLabel}
+    </span>
+  )
+}
 
 // ── PDE type badge ────────────────────────────────────────────────────────────
 
@@ -68,6 +83,109 @@ function EquationList({ equations, selected, onSelect }: {
   )
 }
 
+// ── Solver row helpers (shared between executable / literature_only groups) ──
+
+function AIModelRow({ m }: { m: AIModel }) {
+  return (
+    <div className="rounded-md border bg-white px-3 py-2 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium flex items-center gap-1.5">
+          {m.name}
+          {m.engine_id && <ExecutableBadge engineId={m.engine_id} />}
+        </span>
+        <span className="text-xs font-mono text-muted-foreground">{m.architecture}</span>
+      </div>
+      {m.description && (
+        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{m.description}</p>
+      )}
+    </div>
+  )
+}
+
+function NumericalMethodRow({ m }: { m: NumericalMethod }) {
+  return (
+    <div className="rounded-md border bg-white px-3 py-2 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium flex items-center gap-1.5">
+          {m.name}
+          {m.engine_id && <ExecutableBadge engineId={m.engine_id} />}
+        </span>
+        {m.order != null && m.order > 0 && (
+          <span className="text-xs text-muted-foreground">Order {m.order}</span>
+        )}
+      </div>
+      {m.description && (
+        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{m.description}</p>
+      )}
+    </div>
+  )
+}
+
+function SolversBySection({ solvers }: { solvers: EquationSolvers }) {
+  const { t } = useI18n()
+  const exec = solvers.executable
+  const lit = solvers.literature_only
+  const execCount = exec.ai_models.length + exec.numerical_methods.length
+  const litCount = lit.ai_models.length + lit.numerical_methods.length
+
+  if (execCount === 0 && litCount === 0) {
+    return <p className="text-sm text-muted-foreground">{t.knowledge.equations.noSolvers}</p>
+  }
+
+  const renderGroup = (group: SolverGroup) => (
+    <div className="space-y-3">
+      {group.ai_models.length > 0 && (
+        <div>
+          <h5 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-2">
+            {t.knowledge.equations.aiModelsSubhead}
+          </h5>
+          <div className="space-y-1.5">
+            {group.ai_models.map(m => <AIModelRow key={m.id} m={m} />)}
+          </div>
+        </div>
+      )}
+      {group.numerical_methods.length > 0 && (
+        <div>
+          <h5 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-2">
+            {t.knowledge.equations.numericalMethodsSubhead}
+          </h5>
+          <div className="space-y-1.5">
+            {group.numerical_methods.map(m => <NumericalMethodRow key={m.id} m={m} />)}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
+  return (
+    <div className="space-y-5">
+      {execCount > 0 && (
+        <section className="rounded-lg border border-emerald-200 bg-emerald-50/30 p-3">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-sm font-semibold text-emerald-700 flex items-center gap-1.5">
+              <Zap className="h-4 w-4" />
+              {t.knowledge.equations.executableSection}
+            </h4>
+            <span className="text-xs text-emerald-700/70 font-mono">{execCount}</span>
+          </div>
+          {renderGroup(exec)}
+        </section>
+      )}
+      {litCount > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-sm font-semibold text-muted-foreground">
+              {t.knowledge.equations.literatureSection}
+            </h4>
+            <span className="text-xs text-muted-foreground font-mono">{litCount}</span>
+          </div>
+          {renderGroup(lit)}
+        </section>
+      )}
+    </div>
+  )
+}
+
 // ── Equation detail ───────────────────────────────────────────────────────────
 
 function EquationDetail({ equationId }: { equationId: string }) {
@@ -99,9 +217,11 @@ function EquationDetail({ equationId }: { equationId: string }) {
   if (loading) return <div className="flex justify-center py-16"><Spinner /></div>
   if (!eq) return null
 
+  const solverCount = (g?: SolverGroup): number =>
+    (g?.ai_models.length ?? 0) + (g?.numerical_methods.length ?? 0)
   const sections = [
     { key: 'solvers' as const, label: 'Solvers', icon: FlaskConical,
-      count: (solvers?.ai_models.length ?? 0) + (solvers?.numerical_methods.length ?? 0) },
+      count: solverCount(solvers?.executable) + solverCount(solvers?.literature_only) },
     { key: 'conditions' as const, label: 'Conditions', icon: ChevronRight,
       count: conditions?.conditions.length ?? 0 },
     { key: 'datasets' as const, label: 'Datasets', icon: Database, count: datasets.length },
@@ -156,53 +276,7 @@ function EquationDetail({ equationId }: { equationId: string }) {
 
       {/* Solvers section */}
       {activeSection === 'solvers' && solvers && (
-        <div className="space-y-4">
-          {solvers.ai_models.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                AI / ML Models
-              </h4>
-              <div className="space-y-1.5">
-                {solvers.ai_models.map(m => (
-                  <div key={m.id} className="rounded-md border px-3 py-2 text-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium">{m.name}</span>
-                      <span className="text-xs font-mono text-muted-foreground">{m.architecture}</span>
-                    </div>
-                    {m.description && (
-                      <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{m.description}</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {solvers.numerical_methods.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                Numerical Methods
-              </h4>
-              <div className="space-y-1.5">
-                {solvers.numerical_methods.map(m => (
-                  <div key={m.id} className="rounded-md border px-3 py-2 text-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium">{m.name}</span>
-                      {m.order != null && m.order > 0 && (
-                        <span className="text-xs text-muted-foreground">Order {m.order}</span>
-                      )}
-                    </div>
-                    {m.description && (
-                      <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{m.description}</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {solvers.ai_models.length === 0 && solvers.numerical_methods.length === 0 && (
-            <p className="text-sm text-muted-foreground">No solvers linked yet.</p>
-          )}
-        </div>
+        <SolversBySection solvers={solvers} />
       )}
 
       {/* Conditions section */}

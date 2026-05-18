@@ -1,4 +1,5 @@
 **/target/**
+**/__pycache__/**
 .logs
 .pde-agent.pids
 .opencode

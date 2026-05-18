@@ -33,17 +33,17 @@ use serde::Deserialize;
 use crate::{
     api::AppState,
     retrieval::query::{
-        ai_model_profile, conditions_for_equation, datasets_for_equation,
-        equations_solved_by, paper_profile, papers_proposing, papers_studying,
+        ai_model_profile, benchmark_leaderboard, conditions_for_equation, datasets_for_equation,
+        equations_solved_by, paper_profile, papers_proposing, papers_studying, results_for_method,
         search_by_name, solvers_for_equation,
     },
     store::{
         content_repo::get_content,
         node_repo::{
-            get_ai_model, get_equation, get_numerical_method, get_paper,
-            list_ai_models, list_equations, list_numerical_methods, list_papers,
+            get_ai_model, get_benchmark, get_equation, get_numerical_method, get_paper,
+            list_ai_models, list_benchmarks, list_equations, list_numerical_methods, list_papers,
         },
-        schema::{LABEL_AI_MODEL, LABEL_NUMERICAL_METHOD, LABEL_PAPER},
+        schema::{LABEL_AI_MODEL, LABEL_BENCHMARK, LABEL_NUMERICAL_METHOD, LABEL_PAPER},
     },
 };
 
@@ -226,6 +226,61 @@ pub async fn paper_profile_handler(
         Some(p) => Ok(Json(p).into_response()),
         None => Ok(not_found("paper")),
     }
+}
+
+// ── Benchmarks ────────────────────────────────────────────────────────────────
+
+pub async fn list_benchmarks_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, AppError> {
+    Ok(Json(list_benchmarks(&state.graph).await?))
+}
+
+/// GET /benchmarks/:id — returns the Benchmark node merged with its long-form
+/// protocol from SQLite content (if any).
+pub async fn get_benchmark_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let benchmark = match get_benchmark(&state.graph, &id).await? {
+        Some(b) => b,
+        None => return Ok(not_found("benchmark")),
+    };
+    let content = {
+        let db = state.content_db.lock().await;
+        get_content(&db, &id, LABEL_BENCHMARK).unwrap_or(None)
+    };
+    let notes = content.as_ref().and_then(|c| c.notes.clone());
+
+    Ok(Json(serde_json::json!({
+        "benchmark": benchmark,
+        "notes": notes,
+    }))
+    .into_response())
+}
+
+pub async fn benchmark_leaderboard_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    match benchmark_leaderboard(&state.graph, &id).await? {
+        Some(lb) => Ok(Json(lb).into_response()),
+        None => Ok(not_found("benchmark")),
+    }
+}
+
+pub async fn results_for_ai_model_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    Ok(Json(results_for_method(&state.graph, LABEL_AI_MODEL, &id).await?))
+}
+
+pub async fn results_for_numerical_method_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    Ok(Json(results_for_method(&state.graph, LABEL_NUMERICAL_METHOD, &id).await?))
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────

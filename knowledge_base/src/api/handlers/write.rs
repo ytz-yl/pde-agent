@@ -24,11 +24,13 @@ use crate::{
     api::AppState,
     store::{
         content_repo::{delete_content, upsert_content, NodeContent},
-        node_repo::{delete_node, upsert_node},
+        node_repo::{delete_node, upsert_bench_result, upsert_node},
         relation_repo::{delete_relation, is_valid_relation_type, upsert_relation},
-        schema::{KnowledgeNode, Relation},
+        schema::{BenchResult, KnowledgeNode, LABEL_BENCH_RESULT, Relation, SourceType},
     },
 };
+
+use std::str::FromStr;
 
 use super::query::AppError;
 
@@ -70,11 +72,11 @@ pub async fn upsert_node_handler(
     let node: KnowledgeNode = serde_json::from_value(body)
         .map_err(|e| anyhow::anyhow!("invalid node body: {}", e))?;
 
-    let id = node.node_id().to_string();
     let label = node.label().to_string();
 
-    // Write structural data to Neo4j.
-    upsert_node(&state.graph, &node).await?;
+    // Write structural data to Neo4j. The dispatcher returns the resolved id —
+    // important for BenchResult, where the id may have been auto-generated.
+    let id = upsert_node(&state.graph, &node).await?;
 
     // If any content fields were provided, persist them to SQLite.
     if abstract_text.is_some() || notes.is_some() {
@@ -94,6 +96,76 @@ pub async fn upsert_node_handler(
             "status": "ok",
             "action": "upserted",
             "label": label,
+            "id": id,
+        })),
+    ))
+}
+
+// ── BenchResult convenience submission ────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct SubmitResultRequest {
+    pub method_id: String,
+    pub method_label: String,
+    pub benchmark_id: String,
+    pub value: f64,
+    pub source_type: String,
+    #[serde(default)]
+    pub source_paper_id: Option<String>,
+    #[serde(default)]
+    pub hardware: Option<String>,
+    #[serde(default)]
+    pub code_ref: Option<String>,
+    #[serde(default)]
+    pub recorded_at: Option<String>,
+    /// Free-form long-form notes — stored to SQLite content_repo.
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+/// POST /internal/results — single-call submission of one BenchResult.
+///
+/// Wires the OF_METHOD / ON_BENCHMARK / REPORTED_IN edges automatically.
+/// Saves under an auto-generated id; the response returns it.
+pub async fn submit_result_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SubmitResultRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let source_type = SourceType::from_str(&req.source_type)
+        .map_err(|e| anyhow::anyhow!("invalid source_type: {}", e))?;
+
+    let result = BenchResult {
+        id: None,
+        method_id: req.method_id,
+        method_label: req.method_label,
+        benchmark_id: req.benchmark_id,
+        value: req.value,
+        source_type,
+        source_paper_id: req.source_paper_id.filter(|s| !s.is_empty()),
+        hardware: req.hardware.filter(|s| !s.is_empty()),
+        code_ref: req.code_ref.filter(|s| !s.is_empty()),
+        recorded_at: req.recorded_at.filter(|s| !s.is_empty()),
+    };
+
+    let id = upsert_bench_result(&state.graph, &result).await?;
+
+    if let Some(notes) = req.notes.filter(|s| !s.is_empty()) {
+        let content = NodeContent {
+            node_id: id.clone(),
+            node_type: LABEL_BENCH_RESULT.to_string(),
+            abstract_text: None,
+            notes: Some(notes),
+        };
+        let db = state.content_db.lock().await;
+        upsert_content(&db, &content)?;
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ok",
+            "action": "upserted",
+            "label": LABEL_BENCH_RESULT,
             "id": id,
         })),
     ))
