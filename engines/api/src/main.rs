@@ -3,6 +3,9 @@ mod models;
 mod routes;
 mod solvers;
 
+#[cfg(test)]
+mod tests;
+
 use std::sync::Arc;
 
 use axum::{routing::{get, post}, Router};

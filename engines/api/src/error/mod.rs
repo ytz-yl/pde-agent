@@ -18,6 +18,9 @@ pub enum ApiError {
     #[error("Solver execution failed: {0}")]
     SolverError(String),
 
+    #[error("Solver timed out after {0}s")]
+    Timeout(u64),
+
     #[error("Internal error: {0}")]
     Internal(#[from] anyhow::Error),
 }
@@ -27,9 +30,10 @@ impl IntoResponse for ApiError {
         let (status, message) = match &self {
             ApiError::FileNotFound(_)   => (StatusCode::NOT_FOUND, self.to_string()),
             ApiError::SolverNotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
-            ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
-            ApiError::SolverError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-            ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+            ApiError::BadRequest(_)     => (StatusCode::BAD_REQUEST, self.to_string()),
+            ApiError::SolverError(_)    => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+            ApiError::Timeout(_)        => (StatusCode::REQUEST_TIMEOUT, self.to_string()),
+            ApiError::Internal(_)       => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
         (status, Json(json!({ "success": false, "error": message }))).into_response()
     }

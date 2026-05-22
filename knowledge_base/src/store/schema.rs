@@ -660,3 +660,8 @@ impl std::fmt::Display for NodeType {
         write!(f, "{}", self.as_label())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    include!("schema_tests.rs");
+}

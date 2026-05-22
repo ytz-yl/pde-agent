@@ -1,6 +1,16 @@
 # 求解器 API 调用技巧
 
-端点：`POST /solve`（求解器服务，默认端口 3000）
+求解器服务（默认端口 3000；代码仓库目录已从 `solvers/` 重命名为 `engines/`，但接口和端口未变）有三个端点：
+
+| 端点 | 方法 | 用途 |
+|---|---|---|
+| `/solvers` | GET | 列出可用求解器（`pdeformer2` / `classical`），见下文 |
+| `/files` | POST | 上传张量文件（.npy/.npz/.h5/.pt），返回 `file_id` 供 `/solve` 引用 |
+| `/solve` | POST | 提交求解任务，本文重点 |
+
+**典型流程**：
+- **不带历史输入**：直接 `POST /solve`（简单 PDE 用 IC 描述初值）。
+- **带历史输入**（数据驱动 / 自回归模型）：先 `POST /files` 拿 `file_id` → 再在 `/solve` 请求体的 `pde.history.file_id` 引用它。
 
 ---
 
@@ -63,8 +73,50 @@
 
 | id | 类别 | 适用场景 |
 |---|---|---|
-| `pdeformer2` | machine_learning | 任意形式的 2D PDE，通用首选 |
+| `pdeformer2` | machine_learning | 任意形式的 2D PDE，通用首选；支持 `history` 输入 |
 | `classical` | classical | 热/波/Allen-Cahn/Cahn-Hilliard 及任意符号 PDE，需精确数值解 |
+
+---
+
+## `POST /files` —— 上传张量文件
+
+数据驱动模型常常需要把过往时间步的解场作为输入（autoregressive rollout 起点）。流程是先把张量文件上传到求解器服务，拿到 `file_id`，再在 `/solve` 里引用。
+
+### 请求
+
+`Content-Type: multipart/form-data`，**字段名必须是 `file`**（拼错会返回 400）：
+
+```bash
+curl -X POST http://localhost:3000/files \
+  -F "file=@history.h5"
+```
+
+支持的格式（按扩展名识别）：`.h5` / `.hdf5` / `.npy` / `.npz` / `.pt` / `.pth`。其它扩展名直接返回 400。
+
+### 响应
+
+```json
+{
+  "success": true,
+  "data": {
+    "file_id": "3f2a1b8e-7d4c-4a92-9f31-c0dd1e7e8f22",
+    "filename": "history.h5",
+    "format": "hdf5",
+    "size_bytes": 204800,
+    "path": "/tmp/pde-solver-uploads/3f2a1b8e-...h5"
+  },
+  "request_id": "...",
+  "timestamp": "..."
+}
+```
+
+把 `data.file_id` 拿出来，填到下文 `pde.history.file_id` 即可。
+
+### 存储与生命周期
+
+- 默认存到 `$SOLVER_UPLOAD_DIR`（缺省 `/tmp/pde-solver-uploads/`），保留原扩展名。
+- 服务**没有显式 GC**，进程重启后只要文件还在磁盘上，旧 `file_id` 仍可用（基于扩展名扫描映射）。
+- 不要假设 `file_id` 跨机器/跨实例共享；它只在生成它的那个求解器服务实例里有意义。
 
 ---
 
@@ -146,6 +198,44 @@
 
 > **向后兼容**：若 `variables` 和 `equations` 均为空，则走单变量路径，
 > 使用 `equation` + `initial_condition` + `boundary_condition`。
+
+---
+
+#### 模式三：历史快照（数据驱动 / autoregressive 模型）
+
+适用于把过往若干时间步作为输入、让模型预测后续帧的场景。先 `POST /files` 上传，再在 `pde.history` 引用：
+
+```json
+{
+  "solver": "pdeformer2",
+  "pde": {
+    "equation": "",
+    "history": {
+      "file_id": "3f2a1b8e-7d4c-4a92-9f31-c0dd1e7e8f22",
+      "format": "hdf5",
+      "dataset_key": "/data/u",
+      "input_timesteps": [0, 1, 2],
+      "variables": ["u", "v"]
+    }
+  },
+  "query": { "x": [...], "y": [...], "t": [...] }
+}
+```
+
+`HistorySpec` 字段：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `file_id` | string（必填） | `POST /files` 返回的 id |
+| `format` | string \| null | 文件格式（`hdf5` / `npy` / `npz` / `pt`），缺省时从扩展名推断 |
+| `dataset_key` | string \| null | HDF5 dataset 路径或 npz 数组名；纯 `.npy` / `.pt` 单数组文件可省略 |
+| `input_timesteps` | int[] \| null | 选取哪些时间步作为条件窗口，缺省用文件里全部 |
+| `variables` | string[] | 张量最后一维对应的变量名列表（多通道时必填）；缺省 `["u"]` |
+
+**重要约束**：
+- **`history` 与 IC 互斥**：当 `history` 字段存在时，求解器**忽略** `initial_condition` / `initial_conditions`。两者不要同时填。
+- `classical` 求解器虽然接受 `history`，但**只取张量第一个变量通道**（多通道数据会被裁掉），如需多变量请用 `pdeformer2`。
+- 如果在线无关时间步采样（query.t 不重叠 history 区间），求解器自动外推；过远的预测精度会下降。
 
 ---
 
@@ -262,10 +352,13 @@ v_t1 = [[solution[1][i][j][var_idx] for j in range(shape["n_y"])]
 
 ## 常见错误处理
 
-| HTTP 状态码 | 含义 | 处理建议 |
-|---|---|---|
-| 400 | 请求体格式错误 | 检查 JSON 结构，尤其是 `initial_condition` 长度 |
-| 404 | 指定的求解器不存在 | 先调用 `GET /solvers` 确认可用 ID |
-| 500 | 求解过程内部错误 | 检查 `error` 字段说明，可能是方程格式不支持 |
+| 端点 | HTTP | 含义 | 处理建议 |
+|---|---|---|---|
+| `/solve` | 400 | 请求体格式错误 | 检查 JSON 结构，尤其是 `initial_condition` 长度（须 16384） |
+| `/solve` | 404 | 指定的求解器不存在 | 先调用 `GET /solvers` 确认可用 id |
+| `/solve` | 500 | 求解过程内部错误 | 检查 `error` 字段，可能是方程格式不支持，或 `history.file_id` 不存在 |
+| `/files` | 400 | multipart 字段名错 | 字段名必须是 `file`，不能是 `upload` 或别的 |
+| `/files` | 400 | 文件格式不支持 | 仅 `.h5/.hdf5/.npy/.npz/.pt/.pth` 被识别，其它扩展名拒收 |
+| `/files` | 500 | 写盘失败 | 检查 `$SOLVER_UPLOAD_DIR` 是否可写、磁盘空间 |
 
 响应体中 `success: false` 时，`error` 字段包含具体原因。

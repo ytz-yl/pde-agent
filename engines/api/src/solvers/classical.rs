@@ -6,8 +6,16 @@ use anyhow::Context;
 use async_trait::async_trait;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+use tokio::time::timeout;
 use std::process::Stdio;
 use tracing::{debug, info, warn};
+
+fn solver_timeout_secs() -> u64 {
+    std::env::var("SOLVER_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300)
+}
 
 use crate::error::ApiError;
 use crate::models::{
@@ -94,11 +102,18 @@ impl Solver for ClassicalSolver {
                 .map_err(ApiError::Internal)?;
         }
 
-        let output = child
-            .wait_with_output()
-            .await
-            .context("Failed to wait for Python process")
-            .map_err(ApiError::Internal)?;
+        let timeout_secs = solver_timeout_secs();
+        let output = timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            child.wait_with_output(),
+        )
+        .await
+        .map_err(|_| {
+            // Timeout elapsed — best-effort kill
+            ApiError::Timeout(timeout_secs)
+        })?
+        .context("Failed to wait for Python process")
+        .map_err(ApiError::Internal)?;
 
         let wall_time_ms = t0.elapsed().as_millis() as u64;
 
